@@ -311,6 +311,7 @@ function irisShadowOptions(sh) {
   const f2 = (x) => x.toFixed(2);
   return [
     '#define BG_REFLECTIONS // Smooth Lit surfaces reflect what is on screen',
+    '#define BG_MATERIAL_VIEW 0 // [0 1 2] Debug: colour Lit surfaces by normal, or by smoothness (red) and metal (green)',
     `${sh.on ? '' : '//'}#define BG_SHADOWS // Sun shadows from a shadow map`,
     `#define BG_SHADOW_STRENGTH ${f2(sh.strength)} // [${SHADOW_CHOICES.strength.map(f2).join(' ')}]`,
     `#define BG_SHADOW_SOFTNESS ${f2(sh.softness)} // [${SHADOW_CHOICES.softness.map(f2).join(' ')}]`,
@@ -399,11 +400,21 @@ function surfaceToColor(o, params, target, opts = {}) {
       '// Nothing to reflect (Lighting is Vanilla).',
       'vec3 bg_N = bg_normal;',
       'float bg_sm = 0.0;',
+      'float bg_mt = 0.0;',
       'vec3 bg_reflW = vec3(0.0);',
       'vec3 bg_reflEnv = vec3(0.0);',
     );
   }
   lines.push('rgb += bg_col * bg_emit;');
+  if (target === 'iris') {
+    lines.push(
+      '#if BG_MATERIAL_VIEW == 1',
+      'rgb = bg_N * 0.5 + 0.5; // debug: normals',
+      '#elif BG_MATERIAL_VIEW == 2',
+      'rgb = vec3(bg_sm, bg_mt, 0.0); // debug: smoothness red, metal green',
+      '#endif',
+    );
+  }
   if (fog) {
     lines.push(target === 'preview'
       ? 'rgb = mix(rgb, u_fogColor, clamp((bg_viewDist - u_far * 0.75) / (u_far * 0.25), 0.0, 1.0));'
@@ -1536,7 +1547,7 @@ export function buildIris(graphs, opts = {}) {
   const names = [...c.settings.keys()];
   const sliders = names.filter((n) => c.settings.get(n).kind === 'slider');
   const shadowOpts = ['BG_SHADOWS', 'BG_SHADOW_STRENGTH', 'BG_SHADOW_SOFTNESS', 'shadowMapResolution', 'shadowDistance', 'sunPathRotation'];
-  const reflOpts = ['BG_REFLECTIONS', 'BG_REFLECTION_STEPS'];
+  const reflOpts = ['BG_REFLECTIONS', 'BG_REFLECTION_STEPS', 'BG_MATERIAL_VIEW'];
   const translucent = ['gbuffers_water', 'gbuffers_hand_water', 'gbuffers_entities_translucent', 'gbuffers_block_translucent'];
   const props = [
     `# ${opts.name || 'BlockGraph pack'}, made with BlockGraph.`,
@@ -1588,6 +1599,11 @@ export function buildIris(graphs, opts = {}) {
     'option.BG_REFLECTIONS.comment=Polished metal, water and other smooth Lit surfaces reflect the world on screen. Off: they reflect only the sky, for more FPS.',
     'option.BG_REFLECTION_STEPS=Reflection Quality',
     'option.BG_REFLECTION_STEPS.comment=Steps each reflection ray takes. More finds thinner and further things, and is slower.',
+    'option.BG_MATERIAL_VIEW=Material View',
+    'option.BG_MATERIAL_VIEW.comment=Checks that normal and specular maps load. Normals: bumps show as colour changes. Shine: red is smoothness, green is metal (yellow = polished metal).',
+    'value.BG_MATERIAL_VIEW.0=Off',
+    'value.BG_MATERIAL_VIEW.1=Normals',
+    'value.BG_MATERIAL_VIEW.2=Shine',
   ];
   for (const n of names) {
     const s = c.settings.get(n);
