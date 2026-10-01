@@ -9,6 +9,7 @@ import { Preview } from './preview.js';
 import { PRESETS } from './presets.js';
 import { makeZip } from './zip.js';
 import * as TX from './textures.js';
+import * as MD from './models.js';
 
 const STORE_KEY = 'blockgraph:v1:state';
 const WELCOME_KEY = 'blockgraph:v1:welcomed';
@@ -43,6 +44,10 @@ const GRAPH_INFO = {
     name: 'Texture',
     caption: 'Builds a texture pixel by pixel. It can replace a Minecraft texture (resource pack) or feed shaders via Image Texture.',
   },
+  model: {
+    name: 'Models',
+    caption: 'Real 3D models for blocks and items. They need the BlockGraph Models mod (client side, Fabric 1.21.11). Drag to orbit, shift-drag to pan.',
+  },
 };
 
 // ---------------------------------------------------------------- state
@@ -56,11 +61,15 @@ const state = {
   textures: [],
   texSel: null,
   texNext: 1,
+  models: [],
+  modelSel: null,
+  modelNext: 1,
 };
 const EMPTY_GRAPH = { nodes: [], links: [], nextId: 1 };
 
 // The graph the canvas edits: a shader graph, or the selected texture's graph.
 function currentGraph() {
+  if (state.kind === 'model') return EMPTY_GRAPH;
   if (state.kind !== 'texture') return state.graphs[state.kind];
   const t = TX.selectedTexture();
   return t && t.kind === 'graph' ? t.graph : EMPTY_GRAPH;
@@ -79,7 +88,7 @@ let clipboard = null;
 let lastPointer = null;
 
 function snapshot() {
-  return JSON.stringify({ graphs: state.graphs, packName: state.packName, textures: state.textures, texSel: state.texSel, texNext: state.texNext });
+  return JSON.stringify({ graphs: state.graphs, packName: state.packName, textures: state.textures, texSel: state.texSel, texNext: state.texNext, models: state.models, modelSel: state.modelSel, modelNext: state.modelNext });
 }
 
 function pushHistory() {
@@ -100,11 +109,15 @@ function restore(s) {
   state.textures = data.textures || [];
   state.texSel = data.texSel || null;
   state.texNext = Math.max(state.texNext, data.texNext || 1);
+  state.models = data.models || [];
+  state.modelSel = data.modelSel || null;
+  state.modelNext = Math.max(state.modelNext, data.modelNext || 1);
   TX.syncRegistry();
   editor.load(currentGraph(), state.views[viewKey()]);
   syncTextureView();
   refreshAll();
-  TX.loadAll();
+  TX.loadAll().then(() => MD.refreshViews());
+  MD.renderPanel();
 }
 
 function undo() {
@@ -134,7 +147,7 @@ let saveTimer = 0;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    const ok = store.set(STORE_KEY, JSON.stringify({ graphs: state.graphs, packName: state.packName, kind: state.kind, presetId: state.presetId, textures: state.textures, texSel: state.texSel, texNext: state.texNext }));
+    const ok = store.set(STORE_KEY, JSON.stringify({ graphs: state.graphs, packName: state.packName, kind: state.kind, presetId: state.presetId, textures: state.textures, texSel: state.texSel, texNext: state.texNext, models: state.models, modelSel: state.modelSel, modelNext: state.modelNext }));
     if (ok === false && !save.warned) {
       save.warned = true;
       toast('Too big to autosave in this browser. Save a graph file from Export to keep your work.');
@@ -160,11 +173,14 @@ function loadInitial() {
       if (validGraphs(d.graphs)) {
         state.graphs = d.graphs;
         state.packName = d.packName || state.packName;
-        state.kind = ['post', 'texture'].includes(d.kind) ? d.kind : 'terrain';
+        state.kind = ['post', 'texture', 'model'].includes(d.kind) ? d.kind : 'terrain';
         state.presetId = d.presetId || null;
         state.textures = Array.isArray(d.textures) ? d.textures : [];
         state.texSel = d.texSel || null;
         state.texNext = d.texNext || state.textures.length + 1;
+        state.models = Array.isArray(d.models) ? d.models : [];
+        state.modelSel = d.modelSel || null;
+        state.modelNext = d.modelNext || state.models.length + 1;
         return;
       }
     } catch { /* fall through to the default preset */ }
@@ -374,7 +390,10 @@ function syncTextureView() {
   $('#image-note').hidden = !isImage;
   if (isImage) $('#image-note-title').textContent = t.name;
   document.querySelector('.app').classList.toggle('mode-texture', state.kind === 'texture');
+  document.querySelector('.app').classList.toggle('mode-model', state.kind === 'model');
+  $('#model-stage').hidden = state.kind !== 'model';
   TX.renderPanel();
+  MD.renderPanel();
 }
 
 function selectTexture(id) {
@@ -398,6 +417,14 @@ function onTexturesChanged() {
   scheduleCompile();
   renderStatus();
   if (state.kind !== 'texture') renderInspector();
+  MD.texturesChanged();
+}
+
+// Opens a texture in the Textures tab (from a model's material).
+function editTexture(id) {
+  state.texSel = id;
+  if (state.kind === 'texture') selectTexture(id);
+  else switchGraph('texture');
 }
 
 function renderTexErrors(t) {
@@ -1020,7 +1047,7 @@ function renderStatus() {
     s.textContent = 'Preview is live. Export when it looks right.';
   }
   const { settings } = collectSettings(state.graphs);
-  $('#status-counts').textContent = `Blocks ${state.graphs.terrain.nodes.length} nodes · Post FX ${state.graphs.post.nodes.length} nodes · ${state.textures.length} texture${state.textures.length === 1 ? '' : 's'} · ${settings.size} setting${settings.size === 1 ? '' : 's'}`;
+  $('#status-counts').textContent = `Blocks ${state.graphs.terrain.nodes.length} nodes · Post FX ${state.graphs.post.nodes.length} nodes · ${state.textures.length} texture${state.textures.length === 1 ? '' : 's'} · ${state.models.length} model${state.models.length === 1 ? '' : 's'} · ${settings.size} setting${settings.size === 1 ? '' : 's'}`;
 }
 
 function refreshAll() {
@@ -1149,12 +1176,12 @@ async function saveFile(filename, blob) {
 }
 
 function graphJSON() {
-  return JSON.stringify({ app: 'BlockGraph', version: 2, packName: state.packName, graphs: state.graphs, textures: state.textures, texNext: state.texNext }, null, 2);
+  return JSON.stringify({ app: 'BlockGraph', version: 3, packName: state.packName, graphs: state.graphs, textures: state.textures, texNext: state.texNext, models: state.models, modelNext: state.modelNext, meshes: MD.meshesForFile() }, null, 2);
 }
 
 function openExport() {
   const wrap = el('div', 'export-view');
-  const { files, errors, settings } = buildIris(state.graphs, { name: state.packName });
+  const { files, errors, settings } = buildIris(state.graphs, { name: state.packName, modelBlocks: MD.modelBlocks() });
 
   const nameIn = el('input', 'in-text');
   nameIn.id = 'pack-name';
@@ -1202,7 +1229,7 @@ function openExport() {
   dl.type = 'button';
   dl.addEventListener('click', async () => {
     const tex = await TX.shaderTextureFiles(state.graphs);
-    const built = buildIris(state.graphs, { name: state.packName, customTextures: tex.list });
+    const built = buildIris(state.graphs, { name: state.packName, customTextures: tex.list, modelBlocks: MD.modelBlocks() });
     const zipFiles = { ...built.files, ...tex.files, 'blockgraph-graph.json': graphJSON() };
     await saveFile(`${slug(state.packName)}.zip`, makeZip(zipFiles));
   });
@@ -1212,26 +1239,51 @@ function openExport() {
   actions.append(dl, js);
   wrap.append(actions);
 
-  // Resource pack: the textures that replace Minecraft textures.
+  // Resource pack: textures that replace Minecraft textures, and 3D models.
   const rpCount = TX.texturesWithTarget().length;
+  const modelCount = MD.modelCount();
   const rp = el('section', 'export-rp');
   rp.append(el('h3', 'export-h', 'Resource pack'));
-  rp.append(el('p', 'modal-lead', rpCount
-    ? `${rpCount} texture${rpCount === 1 ? '' : 's'} from the Textures tab replace Minecraft textures. Put this zip in .minecraft/resourcepacks and turn it on next to the shader pack, so your shader runs on your own textures.`
-    : 'No texture replaces a Minecraft texture yet. In the Textures tab, set “Replaces” on a texture (for example block/stone) to add it here.'));
+  const parts = [];
+  if (rpCount) parts.push(`${rpCount} texture${rpCount === 1 ? '' : 's'} from the Textures tab replace${rpCount === 1 ? 's' : ''} Minecraft textures`);
+  if (modelCount) parts.push(`${modelCount} 3D model${modelCount === 1 ? '' : 's'} from the Models tab, with ${modelCount === 1 ? 'its' : 'their'} textures`);
+  rp.append(el('p', 'modal-lead', parts.length
+    ? `${parts.join(', and ')}. Put this zip in .minecraft/resourcepacks and turn it on next to the shader pack, so your shader runs on your own textures.`
+    : 'Nothing for the resource pack yet. In the Textures tab, set “Replaces” on a texture (for example block/stone), or add a 3D model in the Models tab.'));
   const rpBtn = el('button', 'btn primary', 'Download resource pack (.zip)');
   rpBtn.type = 'button';
-  rpBtn.disabled = !rpCount;
+  rpBtn.disabled = !rpCount && !modelCount;
+  const rpNote = el('div');
   rpBtn.addEventListener('click', async () => {
-    const { files } = await TX.buildResourcePackFiles(state.packName);
-    await saveFile(`${slug(state.packName)}_textures.zip`, makeZip(files));
+    const { files: rpFiles } = await TX.buildResourcePackFiles(state.packName);
+    const models = await MD.modelPackFiles(MD.packNamespace(state.packName));
+    rpNote.textContent = '';
+    if (models.problems.length) {
+      const w = el('div', 'insp-error');
+      w.textContent = models.problems.join(' ');
+      rpNote.append(w);
+    }
+    await saveFile(`${slug(state.packName)}_textures.zip`, makeZip({ ...rpFiles, ...models.files }));
   });
-  rp.append(rpBtn);
+  rp.append(rpBtn, rpNote);
   wrap.append(rp);
+
+  if (modelCount) {
+    const mod = el('section', 'export-rp');
+    mod.append(el('h3', 'export-h', 'The BlockGraph Models mod'));
+    mod.append(el('p', 'modal-lead', 'Minecraft cannot load 3D model files on its own. The BlockGraph Models mod adds that. It is client side only: it works on any server, and players without it just see the normal item or block. It needs Fabric Loader and Fabric API for 1.21.11, and works with Sodium and Iris.'));
+    const link = el('a', 'btn ghost', 'Get the mod (.jar)');
+    link.href = MD.MOD_PAGE;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    mod.append(link, el('p', 'field-hint', 'Opens the build page on GitHub. Pick the newest green run and download blockgraph-models-1.21.11 under Artifacts. To build it yourself: cd mod && ./gradlew build.'));
+    wrap.append(mod);
+  }
 
   const steps = el('ol', 'install-steps');
   for (const s of [
     ['Install Iris', 'Fabric Loader for 1.21.11, then the Iris and Sodium mods.'],
+    ...(MD.modelCount() ? [['Add the models mod', 'Put the BlockGraph Models jar and Fabric API in .minecraft/mods.']] : []),
     ['Drop the zips in', 'Shader pack into .minecraft/shaderpacks, resource pack into .minecraft/resourcepacks. Leave them zipped.'],
     ['Turn on the textures', 'Options → Resource Packs, move your pack to the right side and press Done.'],
     ['Pick it in game', 'Options → Video Settings → Shader Packs, or press O. Select your pack and press Apply.'],
@@ -1256,6 +1308,7 @@ function openWhy() {
     ['Real packs, not a toy', 'Export writes an actual Iris shader pack for Minecraft 1.21.11 on Fabric. Drop the zip in shaderpacks and it runs.'],
     ['Players get a settings menu', 'Slider and On/Off nodes become options under Iris → Shader Settings, without hand-editing shaders.properties.'],
     ['Textures and shaders together', 'The Textures tab builds block textures with Blender-style nodes and pixel paint. Export them as a resource pack, see them live under your shader, or feed them to the shader with Image Texture.'],
+    ['Real 3D models', 'The Models tab imports OBJ, glTF and GLB files and turns any item or block into a real 3D model, with its textures painted in the Textures tab. A small client-side mod loads them, with Sodium and Iris.'],
     ['You learn the real thing', 'View code shows the GLSL your graph makes, with each line tagged by node. It is a gentle way into shader programming.'],
     ['Works like Unity Shader Graph', 'Live previews on every node, a Lit output with Normal, Smoothness and Metallic, Custom Function, Sticky Notes, and Unity\u2019s node families from Math to UV. What you learn here transfers to Unity, Unreal, Blender and Godot.'],
   ];
@@ -1270,7 +1323,7 @@ function openWhy() {
   const ul = el('ul');
   for (const t of [
     'Shadows, reflections and volumetric light. Those need extra passes that are not wired up yet.',
-    'From Unity: Sub Graphs, matrix nodes, texture and cubemap asset nodes, parallax mapping and object or reflection probe data. Minecraft has no meshes, objects or probes to feed those.',
+    'From Unity: Sub Graphs, matrix nodes, cubemap asset nodes, parallax mapping and object or reflection probe data. Minecraft has no objects or probes to feed those. (3D models do work, through the Models tab and its mod.)',
     'Entities, the sky and particles keep a simple vanilla-style shader. The graphs cover blocks and the screen.',
     'The preview imitates Minecraft lighting with a small scene. In game, your resource pack and lightmap are used.',
   ]) ul.append(el('li', null, t));
@@ -1310,7 +1363,7 @@ function applyPreset(p) {
   state.graphs.post.needsLayout = true;
   state.presetId = p.id;
   state.views = { ...state.views, terrain: null, post: null };
-  if (state.kind === 'texture') switchGraph('terrain');
+  if (state.kind === 'texture' || state.kind === 'model') switchGraph('terrain');
   editor.load(currentGraph(), null);
   requestAnimationFrame(() => editor.frameAll(true));
   layoutIfNeeded();
@@ -1428,9 +1481,14 @@ function bindUI() {
       state.textures = Array.isArray(d.textures) ? d.textures : [];
       state.texNext = Math.max(d.texNext || 1, state.textures.length + 1);
       state.texSel = state.textures[0]?.id || null;
+      MD.loadMeshesFromFile(d.meshes);
+      state.models = Array.isArray(d.models) ? d.models : [];
+      state.modelNext = Math.max(d.modelNext || 1, state.models.length + 1);
+      state.modelSel = state.models[0]?.id || null;
       state.views = { terrain: null, post: null };
       TX.syncRegistry();
-      TX.loadAll();
+      TX.loadAll().then(() => MD.refreshViews());
+      MD.renderPanel();
       editor.load(currentGraph(), null);
       requestAnimationFrame(() => editor.frameAll(true));
       pushHistory();
@@ -1460,6 +1518,8 @@ function bindUI() {
     } else if (mod && e.key.toLowerCase() === 'y') {
       e.preventDefault();
       redo();
+    } else if (state.kind === 'model') {
+      // the node shortcuts below do nothing in the Models tab
     } else if (mod && e.key.toLowerCase() === 'c') {
       const c = editor.copySelection();
       if (c) { clipboard = c; toast(`Copied ${c.nodes.length} node${c.nodes.length > 1 ? 's' : ''}`); }
@@ -1501,6 +1561,16 @@ TX.initTextures({
   toast: (m) => toast(m),
   selectTexture: (id) => selectTexture(id),
   onTexturesChanged: () => onTexturesChanged(),
+  modelUsage: (id) => MD.usageOf(id),
+  uvSegments: (id) => MD.uvSegments(id),
+});
+const modelsReady = MD.initModels({
+  state, preview,
+  pushHistory: () => pushHistory(),
+  save: () => save(),
+  toast: (m) => toast(m),
+  editTexture: (id) => editTexture(id),
+  onModelsChanged: () => renderStatus(),
 });
 TX.syncRegistry();
 bindUI();
@@ -1513,4 +1583,8 @@ state.kind = null;
 switchGraph(startKind);
 requestAnimationFrame(() => editor.frameAll(false, $('#welcome').hidden ? 0 : 340));
 compileNow();
-TX.loadAll().then(() => { if (state.kind === 'texture') updateNodePreviews(); });
+TX.loadAll().then(async () => {
+  if (state.kind === 'texture') updateNodePreviews();
+  await modelsReady;
+  MD.refreshViews();
+});

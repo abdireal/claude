@@ -105,7 +105,8 @@ function lookAt(e, t, up) {
     -(x[0] * e[0] + x[1] * e[1] + x[2] * e[2]), -(y[0] * e[0] + y[1] * e[1] + y[2] * e[2]), -(z[0] * e[0] + z[1] * e[1] + z[2] * e[2]), 1];
 }
 
-const HOME = { yaw: -0.6, pitch: 0.38, dist: 2.9 };
+// From the front (+Z, where item sprites face), a little to the right and above.
+const HOME = { yaw: 1.2, pitch: 0.32, dist: 2.9 };
 
 export class ModelView {
   constructor(canvas) {

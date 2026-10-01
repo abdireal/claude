@@ -406,10 +406,11 @@ export function placed(mesh, m) {
 // out like a sword or standing it up).
 export function longAxisRotation(mesh) {
   const s = bounds(mesh.pos).size;
-  const i = s.indexOf(Math.max(...s));
-  if (i === 0) return [0, 0, 90];
-  if (i === 2) return [-90, 0, 0];
-  return [0, 0, 0];
+  const max = Math.max(...s);
+  // Y wins ties, so a model that is already upright stays as it is.
+  if (s[1] >= max * 0.98) return [0, 0, 0];
+  if (s[0] >= s[2]) return [0, 0, 90];
+  return [-90, 0, 0];
 }
 
 // Presets for how the mesh sits in the 0..1 block space.
@@ -419,10 +420,10 @@ export function presetFit(kind, mesh) {
     // Handle bottom-left, tip top-right, flat in the z = 0.5 plane: where a
     // vanilla 16x16 sword sprite sits, so Minecraft's handheld poses fit.
     case 'sword': return { s: 1.25, r: [long[0], long[1], long[2] - 45], t: [0, 0, 0] };
-    // Upright and centred, the shape of a normal item.
-    case 'item': return { s: 0.95, r: long, t: [0, 0, 0] };
+    // Centred as modelled, the size of a normal item.
+    case 'item': return { s: 0.95, r: [0, 0, 0], t: [0, 0, 0] };
     // As tall as the vanilla shield (22 pixels), plate a little in front of centre.
-    case 'shield': return { s: 1.375, r: long, t: [0, 0, 0.09] };
+    case 'shield': return { s: 1.375, r: [0, 0, 0], t: [0, 0, 0.09] };
     default: return { s: 1, r: [0, 0, 0], t: [0, 0, 0] };
   }
 }
@@ -431,7 +432,7 @@ export function presetFit(kind, mesh) {
 export function sitOnFloor(mesh, norm, fit) {
   const p = placed(mesh, fitMatrix(norm, fit)).pos;
   const b = bounds(p);
-  return { ...fit, t: [fit.t[0], fit.t[1] - b.min[1], fit.t[2]] };
+  return { ...fit, t: [fit.t[0], Math.round((fit.t[1] - b.min[1]) * 1e5) / 1e5, fit.t[2]] };
 }
 
 // --------------------------------------------------------------- triangles
@@ -511,7 +512,7 @@ export function meshToObj(mesh, m, slots, title = 'model') {
       quads++;
     }
   }
-  return { text: lines.join('\n') + '\n', quads };
+  return { text: lines.join('\n') + '\n', quads, bounds: bounds(pos) };
 }
 
 // ------------------------------------------------------------------ samples
