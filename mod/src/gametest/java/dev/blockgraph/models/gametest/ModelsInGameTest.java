@@ -35,8 +35,8 @@ public class ModelsInGameTest implements FabricClientGameTest {
 
 	@Override
 	public void runTest(ClientGameTestContext context) {
-		context.getInput().resizeWindow(1280, 720);
 		enableTestPack(context);
+		context.takeScreenshot("00_title_screen_with_pack");
 
 		int baked = ObjGeometry.BAKED.get();
 		int failed = ObjGeometry.FAILED.get();
@@ -50,9 +50,7 @@ public class ModelsInGameTest implements FabricClientGameTest {
 			throw new AssertionError("Expected the 3 models of the test pack to bake, but only " + baked + " meshes were baked");
 		}
 
-		try (TestSingleplayerContext world = context.worldBuilder()
-				.adjustSettings(creator -> creator.setGameMode(WorldCreationUiState.SelectedGameMode.CREATIVE))
-				.create()) {
+		try (TestSingleplayerContext world = createWorld(context)) {
 			TestServerContext server = world.getServer();
 			world.getClientWorld().waitForChunksRender();
 
@@ -112,6 +110,21 @@ public class ModelsInGameTest implements FabricClientGameTest {
 			context.waitTicks(20);
 			context.takeScreenshot("07_crystal_blocks");
 			setHideGui(context, false);
+		}
+	}
+
+	// A creative flat world. If it does not load, say which screen it is stuck on.
+	private static TestSingleplayerContext createWorld(ClientGameTestContext context) {
+		try {
+			return context.worldBuilder()
+					.adjustSettings(creator -> creator.setGameMode(WorldCreationUiState.SelectedGameMode.CREATIVE))
+					.create();
+		} catch (AssertionError e) {
+			String state = context.computeOnClient(client -> "screen " + (client.screen == null ? "none" : client.screen.getClass().getName())
+					+ ", level " + (client.level == null ? "none" : "loaded") + ", overlay " + client.getOverlay());
+			LOG.error("World did not load: {}", state);
+			context.takeScreenshot("00_world_load_failed");
+			throw e;
 		}
 	}
 

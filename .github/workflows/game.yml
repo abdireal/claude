@@ -55,7 +55,11 @@ jobs:
         run: |
           log=$(find run -name latest.log | head -1)
           echo "log: $log"
-          grep -iE "blockgraph|obj mesh|resource pack|iris|sodium|shader|error|exception|warn.*model" "$log" | grep -v "Missing sound" | head -300 || true
+          grep -iE "blockgraph|obj mesh|resource pack|iris|sodium|shader|error|exception|warn.*model|did not load" "$log" | grep -v "Missing sound" | cut -c1-400 | head -300 || true
+          echo "--- world loading (last checks)"
+          grep "World loading finished" "$log" | cut -c1-300 | tail -4 || true
+          echo "--- end of the log"
+          tail -40 "$log" | cut -c1-400
       - name: Screenshots as JPEG
         if: always()
         run: |
