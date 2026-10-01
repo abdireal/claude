@@ -1,5 +1,8 @@
 // Live WebGL2 preview: a tiny Minecraft-style scene drawn with the shaders the
-// graph produces. Pass order mirrors Iris: sky → opaque blocks → water → post.
+// graph produces. Pass order mirrors Iris: shadow map → sky → opaque blocks →
+// mobs and chests → water → hand → post.
+
+import { SHADOW_DEFAULTS } from './targets.js';
 
 // ------------------------------------------------------------------ math
 
@@ -34,6 +37,12 @@ const m4 = {
     m[11] = -1;
     m[14] = (2 * far * near) / (near - far);
     return m;
+  },
+  ortho(l, r, b, t, n, f) {
+    return new Float32Array([
+      2 / (r - l), 0, 0, 0, 0, 2 / (t - b), 0, 0, 0, 0, -2 / (f - n), 0,
+      -(r + l) / (r - l), -(t + b) / (t - b), -(f + n) / (f - n), 1,
+    ]);
   },
   lookAt(e, t, u) {
     let zx = e[0] - t[0], zy = e[1] - t[1], zz = e[2] - t[2];
@@ -632,6 +641,24 @@ export class Preview {
     this.fbo = gl.createFramebuffer();
     this.colorTex = gl.createTexture();
     this.depthTex = gl.createTexture();
+
+    // Sun shadow map: depth only, seen from the sun, like Iris's shadowtex.
+    this.shadow = { ...SHADOW_DEFAULTS };
+    this.shadowSize = 1024;
+    this.shadowTex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, this.shadowTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.DEPTH_COMPONENT24, this.shadowSize, this.shadowSize, 0, gl.DEPTH_COMPONENT, gl.UNSIGNED_INT, null);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    this.shadowFbo = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFbo);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.TEXTURE_2D, this.shadowTex, 0);
+    gl.drawBuffers([gl.NONE]);
+    gl.readBuffer(gl.NONE);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, null);
   }
 
   makeMesh(data) {
@@ -653,28 +680,25 @@ export class Preview {
   }
 
   // Compiles new graph shaders. Keeps the last working ones if this fails.
-  setShaders({ terrainVS, terrainFS, postFS, entityVS, entityFS }) {
+  setShaders({ terrainVS, terrainFS, postFS, entityVS, entityFS, shadowFS }) {
     if (!this.ok) return { ok: false, error: this.error };
     const gl = this.gl;
     const result = { ok: true };
-    if (entityVS) {
+    // Shadow casters reuse each graph's vertex shader, so they swap in together.
+    const swap = (key, vs, fs, errKey) => {
       try {
-        const e = link(gl, entityVS, entityFS, ATTRIBS);
-        if (this.entity) gl.deleteProgram(this.entity.p);
-        this.entity = e;
+        const main = link(gl, vs, fs, ATTRIBS);
+        const caster = shadowFS ? link(gl, vs, shadowFS, ATTRIBS) : null;
+        for (const old of [this[key], this[key + 'Shadow']]) if (old) gl.deleteProgram(old.p);
+        this[key] = main;
+        this[key + 'Shadow'] = caster;
       } catch (err) {
         result.ok = false;
-        result.entityError = String(err.message || err);
+        result[errKey] = String(err.message || err);
       }
-    }
-    try {
-      const t = link(gl, terrainVS, terrainFS, ATTRIBS);
-      if (this.terrain) gl.deleteProgram(this.terrain.p);
-      this.terrain = t;
-    } catch (e) {
-      result.ok = false;
-      result.terrainError = String(e.message || e);
-    }
+    };
+    if (entityVS) swap('entity', entityVS, entityFS, 'entityError');
+    swap('terrain', terrainVS, terrainFS, 'terrainError');
     try {
       const p = link(gl, FULLSCREEN_VS, postFS);
       if (this.post) gl.deleteProgram(this.post.p);
@@ -684,6 +708,11 @@ export class Preview {
       result.postError = String(e.message || e);
     }
     return result;
+  }
+
+  setShadows(cfg) {
+    this.shadow = { ...SHADOW_DEFAULTS, ...(cfg || {}) };
+    if (this.np) this.np.dirty = true;
   }
 
   setSettings(map) {
@@ -761,10 +790,45 @@ export class Preview {
     const rainy = this.rain;
     sky = mixc(sky, [0.35, 0.38, 0.43].map((v) => v * (0.25 + daylight * 0.75)), rainy * 0.7);
     fog = mixc(fog, [0.42, 0.45, 0.5].map((v) => v * (0.25 + daylight * 0.75)), rainy * 0.7);
+    // The sun crosses the sky east to west; Sun Angle (sunPathRotation) tilts its path.
     const a = t * Math.PI * 2;
-    const sun = [Math.cos(a) * 0.9, Math.sin(a), 0.42];
-    const l = Math.hypot(...sun);
-    return { sky, fog, sun: sun.map((v) => v / l) };
+    const tilt = ((this.shadow?.sunAngle ?? SHADOW_DEFAULTS.sunAngle) * Math.PI) / 180;
+    const sun = [Math.cos(a), Math.sin(a) * Math.cos(tilt), Math.sin(a) * Math.sin(tilt)];
+    // Shadows come from the sun by day and the moon by night, like Iris.
+    const light = sun[1] > -0.1 ? sun : sun.map((v) => -v);
+    return { sky, fog, sun, light };
+  }
+
+  // Renders the shadow map from the sun. An orthographic box fits the island.
+  renderShadowMap(f) {
+    const gl = this.gl;
+    const L = f.env.light;
+    const center = [-0.3, 1.5, -0.3];
+    const R = 8.5;
+    const eye = [center[0] + L[0] * 30, center[1] + L[1] * 30, center[2] + L[2] * 30];
+    const up = Math.abs(L[1]) > 0.95 ? [0, 0, 1] : [0, 1, 0];
+    this.shadowMat = m4.mul(m4.ortho(-R, R, -R, R, 1, 60), m4.lookAt(eye, center, up));
+    this.shadowTexel = (2 * R) / this.shadowSize;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.shadowFbo);
+    gl.viewport(0, 0, this.shadowSize, this.shadowSize);
+    gl.clearDepth(1);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.atlas);
+    if (this.terrainShadow) {
+      const u = this.terrainShadow.u;
+      gl.useProgram(this.terrainShadow.p);
+      if (u.u_atlas) gl.uniform1i(u.u_atlas, 0);
+      if (u.u_viewProj) gl.uniformMatrix4fv(u.u_viewProj, false, this.shadowMat);
+      this.setCommon(u, f);
+      gl.bindVertexArray(this.meshes.opaque.vao);
+      gl.drawArrays(gl.TRIANGLES, 0, this.meshes.opaque.count);
+    }
+    if (this.entityShadow) this.drawEntities(this.shadowMat, f, false, null, this.entityShadow);
   }
 
   frame() {
@@ -788,6 +852,9 @@ export class Preview {
       fwd: [(target[0] - eye[0]) / fl, (target[1] - eye[1]) / fl, (target[2] - eye[2]) / fl],
     };
     this.lastFrame = f;
+
+    this.shadowLive = !!(this.shadow.on && this.terrainShadow);
+    if (this.shadowLive) this.renderShadowMap(f);
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.viewport(0, 0, this.w, this.h);
@@ -828,6 +895,11 @@ export class Preview {
     // block entities and mobs (Items & Entities graph)
     if (this.entity) this.drawEntities(viewProj, f, false, view);
 
+    // water: back to the Blocks program (the entity pass switched programs and textures)
+    gl.useProgram(tp.p);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.atlas);
+    this.setCommon(u, f);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
@@ -1115,9 +1187,8 @@ export class Preview {
   }
 
   // Draws the chest and zombie (world) or the held sword and shield (hand).
-  drawEntities(viewProj, f, hand, view) {
+  drawEntities(viewProj, f, hand, view, ep = this.entity) {
     const gl = this.gl;
-    const ep = this.entity;
     const u = ep.u;
     gl.useProgram(ep.p);
     gl.activeTexture(gl.TEXTURE0);
@@ -1177,6 +1248,18 @@ export class Preview {
     // The preview player holds a sword (main hand) and a shield (off hand).
     if (u.u_heldItem) gl.uniform1i(u.u_heldItem, 20001);
     if (u.u_heldItem2) gl.uniform1i(u.u_heldItem2, 20003);
+    if (u.u_shadowStrength) gl.uniform1f(u.u_shadowStrength, this.shadow.strength);
+    if (u.u_shadowMap) {
+      gl.activeTexture(gl.TEXTURE3);
+      gl.bindTexture(gl.TEXTURE_2D, this.shadowLive ? this.shadowTex : null);
+      gl.activeTexture(gl.TEXTURE0);
+      gl.uniform1i(u.u_shadowMap, 3);
+      gl.uniform1f(u.u_shadowOn, this.shadowLive ? 1 : 0);
+      if (this.shadowMat) gl.uniformMatrix4fv(u.u_shadowMat, false, this.shadowMat);
+      gl.uniform3fv(u.u_shadowLight, f.env.light);
+      gl.uniform1f(u.u_shadowTexel, this.shadowTexel || 0.02);
+      gl.uniform1f(u.u_shadowSoft, this.shadow.softness);
+    }
     if (u.u_projInv) gl.uniformMatrix4fv(u.u_projInv, false, f.projInv);
     this.applySettings(u);
   }

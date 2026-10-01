@@ -3,7 +3,7 @@
 
 import { NODE_DEFS, CATEGORIES, BINDS, rgbToHex, hexToLinear, normStops, allowedIn } from './nodes.js';
 import { defaultParams, collectSettings, inferTypes } from './codegen.js';
-import { buildPreview, buildIris, sliderValues, buildNodePreview, previewableNode, PREVIEW_TILE, choiceOptions, choiceIndex, defaultEntityGraph } from './targets.js';
+import { buildPreview, buildIris, sliderValues, buildNodePreview, previewableNode, PREVIEW_TILE, choiceOptions, choiceIndex, defaultEntityGraph, normShadows, SHADOW_CHOICES } from './targets.js';
 import { GraphEditor } from './editor.js';
 import { Preview } from './preview.js';
 import { PRESETS } from './presets.js';
@@ -60,6 +60,7 @@ const state = {
   textures: [],
   texSel: null,
   texNext: 1,
+  shadows: normShadows(),
 };
 const EMPTY_GRAPH = { nodes: [], links: [], nextId: 1 };
 
@@ -83,7 +84,7 @@ let clipboard = null;
 let lastPointer = null;
 
 function snapshot() {
-  return JSON.stringify({ graphs: state.graphs, packName: state.packName, textures: state.textures, texSel: state.texSel, texNext: state.texNext });
+  return JSON.stringify({ graphs: state.graphs, packName: state.packName, textures: state.textures, texSel: state.texSel, texNext: state.texNext, shadows: state.shadows });
 }
 
 function pushHistory() {
@@ -104,6 +105,7 @@ function restore(s) {
   state.textures = data.textures || [];
   state.texSel = data.texSel || null;
   state.texNext = Math.max(state.texNext, data.texNext || 1);
+  state.shadows = normShadows(data.shadows);
   TX.syncRegistry();
   editor.load(currentGraph(), state.views[viewKey()]);
   syncTextureView();
@@ -138,7 +140,7 @@ let saveTimer = 0;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    const ok = store.set(STORE_KEY, JSON.stringify({ graphs: state.graphs, packName: state.packName, kind: state.kind, presetId: state.presetId, textures: state.textures, texSel: state.texSel, texNext: state.texNext }));
+    const ok = store.set(STORE_KEY, JSON.stringify({ graphs: state.graphs, packName: state.packName, kind: state.kind, presetId: state.presetId, textures: state.textures, texSel: state.texSel, texNext: state.texNext, shadows: state.shadows }));
     if (ok === false && !save.warned) {
       save.warned = true;
       toast('Too big to autosave in this browser. Save a graph file from Export to keep your work.');
@@ -178,6 +180,7 @@ function loadInitial() {
         state.textures = Array.isArray(d.textures) ? d.textures : [];
         state.texSel = d.texSel || null;
         state.texNext = d.texNext || state.textures.length + 1;
+        state.shadows = normShadows(d.shadows);
         return;
       }
     } catch { /* fall through to the default preset */ }
@@ -212,6 +215,7 @@ function compileNow() {
     const r = preview.setShaders(built);
     if (!r.ok) glErrors = r;
     preview.setSettings(built.settings);
+    preview.setShadows(state.shadows);
   }
   editor.setErrors(lastErrors.filter((e) => e.graph === state.kind || e.graph === null));
   renderStatus();
@@ -968,11 +972,18 @@ function renderGraphInspector(box) {
   const { settings } = collectSettings(state.graphs);
   const sec = el('section', 'insp-sec');
   sec.append(el('h3', null, 'Iris settings menu'));
-  if (!settings.size) {
-    sec.append(el('p', 'insp-desc', 'Add a Slider Setting or On/Off Setting node, and it appears here and in Iris → Shader Settings.'));
-  } else {
+  {
     const mock = el('div', 'iris-menu');
     mock.append(el('div', 'iris-menu-title', state.packName));
+    const page = el('button', 'iris-option');
+    page.type = 'button';
+    page.append(el('span', null, 'Shadows...'));
+    page.title = 'Open the Shadows settings below';
+    page.addEventListener('click', () => {
+      const t = document.getElementById('shadow-sec');
+      if (t) t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+    mock.append(page);
     for (const [name, s] of settings) {
       const b = el('button', 'iris-option');
       b.type = 'button';
@@ -992,9 +1003,12 @@ function renderGraphInspector(box) {
       });
       mock.append(b);
     }
-    sec.append(mock, el('p', 'field-hint', 'This is how your settings will look in Iris → Shader Settings. Click one to jump to its node.'));
+    sec.append(mock, el('p', 'field-hint', settings.size
+      ? 'This is how your settings will look in Iris → Shader Settings. Click one to jump to its node.'
+      : 'Add a Slider Setting or On/Off Setting node, and it appears here and in Iris → Shader Settings.'));
   }
   box.append(sec);
+  box.append(shadowSection());
 
   const tips = el('section', 'insp-sec');
   tips.append(el('h3', null, 'Quick moves'));
@@ -1013,6 +1027,69 @@ function renderGraphInspector(box) {
   }
   tips.append(ul);
   box.append(tips);
+}
+
+// Pack-wide sun shadows. Strength, softness and sun angle show up live in the
+// preview; quality and distance only matter in game.
+function shadowSection() {
+  const sh = state.shadows;
+  const sec = el('section', 'insp-sec');
+  sec.id = 'shadow-sec';
+  sec.append(el('h3', null, 'Shadows'));
+  const commit = () => { preview.setShadows(state.shadows); pushHistory(); };
+  const sw = el('label', 'ctl-switch');
+  const cb = el('input');
+  cb.type = 'checkbox';
+  cb.checked = sh.on;
+  cb.addEventListener('change', () => {
+    state.shadows = { ...state.shadows, on: cb.checked };
+    commit();
+    renderInspector();
+  });
+  sw.append(cb, el('span', 'switch'), el('span', null, 'Sun shadows'));
+  sec.append(sw, el('p', 'field-hint', 'Blocks, mobs and chests cast shadows from the sun. Players can still turn them off in Iris → Shader Settings → Shadows.'));
+  if (!sh.on) return sec;
+
+  const slider = (label, key, list, fmt, hint) => {
+    const range = el('input', 'in-range');
+    range.type = 'range';
+    range.min = '0';
+    range.max = String(list.length - 1);
+    range.step = '1';
+    range.value = String(Math.max(0, list.indexOf(sh[key])));
+    range.setAttribute('aria-label', label);
+    const out = el('output', 'in-range-val', fmt(sh[key]));
+    range.addEventListener('input', () => {
+      state.shadows = { ...state.shadows, [key]: list[Number(range.value)] };
+      out.textContent = fmt(state.shadows[key]);
+      preview.setShadows(state.shadows);
+    });
+    range.addEventListener('change', () => pushHistory());
+    const rr = el('div', 'range-row');
+    rr.append(range, out);
+    sec.append(field(label, rr, hint));
+  };
+  slider('Strength', 'strength', SHADOW_CHOICES.strength, (v) => `${Math.round(v * 100)}%`, 'How dark shadows get. Only sunlight is blocked; torches still light shadowed spots.');
+  slider('Softness', 'softness', SHADOW_CHOICES.softness, (v) => v.toFixed(2), 'Blur on the edges, in shadow map pixels. 0 is pixel-sharp.');
+  slider('Sun angle', 'sunAngle', SHADOW_CHOICES.sunAngle, (v) => `${v}°`, 'Tilts the sun’s path (sunPathRotation) so shadows fall to one side at noon.');
+
+  const select = (label, key, list, fmt, hint) => {
+    const s = el('select', 'in-select');
+    for (const v of list) {
+      const o = el('option', null, fmt(v));
+      o.value = String(v);
+      s.append(o);
+    }
+    s.value = String(sh[key]);
+    s.addEventListener('change', () => {
+      state.shadows = { ...state.shadows, [key]: Number(s.value) };
+      commit();
+    });
+    sec.append(field(label, s, hint));
+  };
+  select('Quality', 'resolution', SHADOW_CHOICES.resolution, (v) => `${v} × ${v}${v === 2048 ? ' (default)' : ''}`, 'Shadow map size in game. Higher is sharper and costs more FPS.');
+  select('Distance', 'distance', SHADOW_CHOICES.distance, (v) => `${v} blocks`, 'How far from the player shadows are drawn in game.');
+  return sec;
 }
 
 // --------------------------------------------------------------- status
@@ -1095,9 +1172,9 @@ async function copyText(text, btn) {
 }
 
 function openCode() {
-  const { files, errors } = buildIris(state.graphs, { name: state.packName });
+  const { files, errors } = buildIris(state.graphs, { name: state.packName, shadows: state.shadows });
   const wrap = el('div', 'code-view');
-  const order = ['shaders/gbuffers_terrain.fsh', 'shaders/gbuffers_terrain.vsh', 'shaders/gbuffers_entities.fsh', 'shaders/gbuffers_entities.vsh', 'shaders/gbuffers_hand.fsh', 'shaders/composite.fsh', 'shaders/shaders.properties', 'shaders/block.properties', 'shaders/item.properties', 'shaders/entity.properties', 'shaders/lang/en_us.lang'];
+  const order = ['shaders/gbuffers_terrain.fsh', 'shaders/gbuffers_terrain.vsh', 'shaders/gbuffers_entities.fsh', 'shaders/gbuffers_entities.vsh', 'shaders/gbuffers_hand.fsh', 'shaders/composite.fsh', 'shaders/shadow.vsh', 'shaders/shadow.fsh', 'shaders/shaders.properties', 'shaders/block.properties', 'shaders/item.properties', 'shaders/entity.properties', 'shaders/lang/en_us.lang'];
   const names = [...order, ...Object.keys(files).filter((f) => !order.includes(f))];
   const tabs = el('div', 'code-tabs');
   tabs.setAttribute('role', 'tablist');
@@ -1161,12 +1238,12 @@ async function saveFile(filename, blob) {
 }
 
 function graphJSON() {
-  return JSON.stringify({ app: 'BlockGraph', version: 2, packName: state.packName, graphs: state.graphs, textures: state.textures, texNext: state.texNext }, null, 2);
+  return JSON.stringify({ app: 'BlockGraph', version: 3, packName: state.packName, graphs: state.graphs, textures: state.textures, texNext: state.texNext, shadows: state.shadows }, null, 2);
 }
 
 function openExport() {
   const wrap = el('div', 'export-view');
-  const { files, errors, settings } = buildIris(state.graphs, { name: state.packName });
+  const { files, errors, settings } = buildIris(state.graphs, { name: state.packName, shadows: state.shadows });
 
   const nameIn = el('input', 'in-text');
   nameIn.id = 'pack-name';
@@ -1214,7 +1291,7 @@ function openExport() {
   dl.type = 'button';
   dl.addEventListener('click', async () => {
     const tex = await TX.shaderTextureFiles(state.graphs);
-    const built = buildIris(state.graphs, { name: state.packName, customTextures: tex.list });
+    const built = buildIris(state.graphs, { name: state.packName, customTextures: tex.list, shadows: state.shadows });
     const zipFiles = { ...built.files, ...tex.files, 'blockgraph-graph.json': graphJSON() };
     await saveFile(`${slug(state.packName)}.zip`, makeZip(zipFiles));
   });
@@ -1439,6 +1516,7 @@ function bindUI() {
       state.textures = Array.isArray(d.textures) ? d.textures : [];
       state.texNext = Math.max(d.texNext || 1, state.textures.length + 1);
       state.texSel = state.textures[0]?.id || null;
+      state.shadows = normShadows(d.shadows);
       state.views = { terrain: null, entity: null, post: null };
       TX.syncRegistry();
       TX.loadAll();
