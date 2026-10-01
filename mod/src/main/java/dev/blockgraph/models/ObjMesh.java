@@ -10,15 +10,16 @@ import java.util.List;
  *
  * <p>Supports {@code v} (with optional vertex colours {@code v x y z r g b}), {@code vt}, {@code vn},
  * {@code f} with any of the {@code v}, {@code v/vt}, {@code v//vn}, {@code v/vt/vn} forms and negative
- * indices, and {@code usemtl}. Faces with more than four corners are split into a triangle fan.
- * Groups, smoothing groups, lines and {@code mtllib} are ignored: textures come from the model file.
+ * indices, {@code usemtl}, and {@code o} / {@code g} names (entity models use them to name body
+ * parts). Faces with more than four corners are split into a triangle fan. Smoothing groups, lines
+ * and {@code mtllib} are ignored: textures come from the model file.
  */
 public final class ObjMesh {
 	/** One corner of a face. {@code uv} and {@code normal} are -1 when the file gave none. */
 	public record Corner(int position, int uv, int normal) { }
 
-	/** A triangle or a quad. */
-	public record Face(Corner[] corners, String material) { }
+	/** A triangle or a quad, with its material and the object or group it was in ("" if none). */
+	public record Face(Corner[] corners, String material, String group) { }
 
 	public final List<float[]> positions = new ArrayList<>();
 	public final List<float[]> colors = new ArrayList<>();
@@ -30,6 +31,7 @@ public final class ObjMesh {
 	public static ObjMesh parse(BufferedReader reader) throws IOException {
 		ObjMesh mesh = new ObjMesh();
 		String material = "";
+		String group = "";
 		String line;
 		int lineNumber = 0;
 
@@ -64,7 +66,8 @@ public final class ObjMesh {
 				case "vt" -> mesh.uvs.add(new float[] {f(p[1]), p.length > 2 ? f(p[2]) : 0});
 				case "vn" -> mesh.normals.add(new float[] {f(p[1]), f(p[2]), f(p[3])});
 				case "usemtl" -> material = p.length > 1 ? line.substring(6).strip() : "";
-				case "f" -> mesh.addFace(p, material);
+				case "o", "g" -> group = p.length > 1 ? p[1] : "";
+				case "f" -> mesh.addFace(p, material, group);
 				default -> { }
 				}
 			} catch (RuntimeException e) {
@@ -75,7 +78,7 @@ public final class ObjMesh {
 		return mesh;
 	}
 
-	private void addFace(String[] p, String material) {
+	private void addFace(String[] p, String material, String group) {
 		Corner[] corners = new Corner[p.length - 1];
 
 		for (int i = 1; i < p.length; i++) {
@@ -91,12 +94,12 @@ public final class ObjMesh {
 		}
 
 		if (corners.length <= 4) {
-			faces.add(new Face(corners, material));
+			faces.add(new Face(corners, material, group));
 			return;
 		}
 
 		for (int i = 1; i < corners.length - 1; i++) {
-			faces.add(new Face(new Corner[] {corners[0], corners[i], corners[i + 1]}, material));
+			faces.add(new Face(new Corner[] {corners[0], corners[i], corners[i + 1]}, material, group));
 		}
 	}
 

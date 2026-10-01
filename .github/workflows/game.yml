@@ -3,12 +3,9 @@ name: Minecraft in-game test
 # Starts real Minecraft 1.21.11 with the BlockGraph Models mod and a resource
 # pack exported by BlockGraph, checks that every model loads, and takes
 # screenshots. The iris run adds Sodium, Iris and a BlockGraph shader pack.
+# Only runs when started by hand (Actions → Run workflow): Minecraft is tested
+# in game by people, and pushes only build the mod (mod.yml).
 on:
-  push:
-    paths:
-      - 'mod/**'
-      - '!mod/screenshots/**'
-      - '.github/workflows/game.yml'
   workflow_dispatch:
     inputs:
       commit_screenshots:

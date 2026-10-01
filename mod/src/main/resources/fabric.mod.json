@@ -3,20 +3,28 @@
   "id": "blockgraph_models",
   "version": "${version}",
   "name": "BlockGraph Models",
-  "description": "Client-side 3D models from resource packs. Any block or item can use a real OBJ mesh instead of boxes. Works on any server, with Sodium and Iris shaders.",
-  "authors": ["BlockGraph"],
+  "description": "Client-side 3D models from resource packs: any block or item, chests, signs, beds, banners and heads, mobs, players and worn armour can use a real OBJ mesh instead of boxes. Works on any server, with Sodium and Iris shaders.",
+  "authors": [
+    "BlockGraph"
+  ],
   "contact": {
     "sources": "https://github.com/abdireal/claude"
   },
   "environment": "client",
   "entrypoints": {
-    "client": ["dev.blockgraph.models.BlockGraphModels"]
+    "client": [
+      "dev.blockgraph.models.BlockGraphModels"
+    ]
   },
   "depends": {
     "fabricloader": ">=0.17.3",
     "minecraft": "~1.21.11",
     "java": ">=21",
     "fabric-model-loading-api-v1": "*",
-    "fabric-renderer-api-v1": "*"
-  }
+    "fabric-renderer-api-v1": "*",
+    "fabric-rendering-v1": "*"
+  },
+  "mixins": [
+    "blockgraph_models.mixins.json"
+  ]
 }

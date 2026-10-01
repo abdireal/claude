@@ -2,8 +2,11 @@ package dev.blockgraph.models;
 
 import java.io.BufferedReader;
 import java.io.IOException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -26,6 +29,7 @@ import net.minecraft.client.resources.model.UnbakedGeometry;
 import net.minecraft.core.Direction;
 import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.Resource;
+import net.minecraft.server.packs.resources.ResourceManager;
 
 import net.fabricmc.fabric.api.renderer.v1.Renderer;
 import net.fabricmc.fabric.api.renderer.v1.mesh.MutableMesh;
@@ -48,6 +52,13 @@ public record ObjGeometry(Identifier location, ObjOptions options) implements Un
 	public static final AtomicInteger BAKED = new AtomicInteger();
 	public static final AtomicInteger FAILED = new AtomicInteger();
 
+	/** Every geometry this class baked, so a baked block model can be recognised as an OBJ model. */
+	private static final Set<QuadCollection> OURS = Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
+
+	public static boolean isObjGeometry(QuadCollection quads) {
+		return quads != null && OURS.contains(quads);
+	}
+
 	@Override
 	public QuadCollection bake(TextureSlots textures, ModelBaker baker, ModelState settings, ModelDebugName name) {
 		MutableMesh builder = Renderer.get().mutableMesh();
@@ -62,7 +73,7 @@ public record ObjGeometry(Identifier location, ObjOptions options) implements Un
 			FAILED.incrementAndGet();
 			BlockGraphModels.LOGGER.error("{}: could not load mesh {}: {}", name.debugName(), location, e.getMessage());
 			emitErrorCube(emitter, sprite(textures, baker, name, ""));
-			return new MeshBakedGeometry(builder.immutableCopy());
+			return remember(new MeshBakedGeometry(builder.immutableCopy()));
 		}
 
 		Matrix4f transform = options.transform();
@@ -125,11 +136,21 @@ public record ObjGeometry(Identifier location, ObjOptions options) implements Un
 		}
 
 		BAKED.incrementAndGet();
-		return new MeshBakedGeometry(builder.immutableCopy());
+		return remember(new MeshBakedGeometry(builder.immutableCopy()));
 	}
 
-	private static ObjMesh load(Identifier location) throws IOException {
-		Optional<Resource> resource = Minecraft.getInstance().getResourceManager().getResource(location);
+	private static QuadCollection remember(QuadCollection quads) {
+		OURS.add(quads);
+		return quads;
+	}
+
+	/** Reads an OBJ file from the resource packs. */
+	public static ObjMesh load(Identifier location) throws IOException {
+		return load(Minecraft.getInstance().getResourceManager(), location);
+	}
+
+	public static ObjMesh load(ResourceManager manager, Identifier location) throws IOException {
+		Optional<Resource> resource = manager.getResource(location);
 
 		if (resource.isEmpty()) {
 			throw new IOException("file not found in any resource pack (expected assets/" + location.getNamespace() + "/" + location.getPath() + ")");

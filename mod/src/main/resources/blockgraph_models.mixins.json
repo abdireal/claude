@@ -1,0 +1,20 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "dev.blockgraph.models.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "BlockEntityRenderDispatcherMixin",
+    "BlockStateBaseMixin",
+    "EntityRenderDispatcherMixin",
+    "HumanoidArmorLayerMixin",
+    "LivingEntityRendererMixin",
+    "ModelPartAccessor",
+    "ModelPartMixin",
+    "SimpleModelWrapperAccessor",
+    "SubmitNodeCollectionMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
