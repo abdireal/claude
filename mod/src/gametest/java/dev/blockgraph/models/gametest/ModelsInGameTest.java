@@ -109,7 +109,27 @@ public class ModelsInGameTest implements FabricClientGameTest {
 			world.getClientWorld().waitForChunksRender();
 			context.waitTicks(20);
 			context.takeScreenshot("07_crystal_blocks");
+
+			// A pool with gold pillars behind it: with the shader, the water and
+			// the held Sting reflect what is on screen.
+			server.runCommand("execute as @p at @s run tp @s ~ ~ ~-8 0 22");
+			server.runCommand("execute as @p at @s run fill ~-5 ~-1 ~2 ~5 ~-1 ~9 minecraft:water");
+			server.runCommand("execute as @p at @s run fill ~-3 ~ ~10 ~-3 ~3 ~10 minecraft:gold_block");
+			server.runCommand("execute as @p at @s run fill ~3 ~ ~10 ~3 ~3 ~10 minecraft:diamond_block");
+			server.runCommand("execute as @p at @s run fill ~-1 ~ ~11 ~1 ~2 ~11 minecraft:red_concrete");
 			setHideGui(context, false);
+			context.getInput().pressKey(options -> options.keyHotbarSlots[0]);
+			world.getClientWorld().waitForChunksRender();
+			context.waitTicks(40);
+			context.takeScreenshot("08_water_reflections");
+
+			// Sting up close in the hand, looking at the sky and then the pool.
+			server.runCommand("execute as @p at @s run tp @s ~ ~ ~ 0 -20");
+			context.waitTicks(30);
+			context.takeScreenshot("09_sting_sky");
+			server.runCommand("execute as @p at @s run tp @s ~ ~ ~ 0 55");
+			context.waitTicks(30);
+			context.takeScreenshot("10_sting_over_water");
 		}
 	}
 
