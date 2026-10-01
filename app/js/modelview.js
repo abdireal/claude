@@ -179,12 +179,16 @@ export class ModelView {
   }
 
   home() {
-    Object.assign(this.cam, HOME, { target: [0.5, 0.5, 0.5] });
+    // Mobs stand up to two blocks tall: look at their middle from further away.
+    const tall = this.opts.guide === 'mob';
+    Object.assign(this.cam, HOME, tall ? { dist: 4.4, target: [0.5, 1, 0.5] } : { target: [0.5, 0.5, 0.5] });
     this.dirty = true;
   }
 
   setOptions(o) {
+    const wasMob = this.opts.guide === 'mob';
     Object.assign(this.opts, o);
+    if (o.guide !== undefined && (o.guide === 'mob') !== wasMob) this.home();
     this.buildLines();
     this.dirty = true;
   }
@@ -293,6 +297,14 @@ export class ModelView {
       // where a vanilla 16x16 item sprite sits: the z = 0.5 square
       seg([0, 0, 0.5], [1, 0, 0.5]); seg([1, 0, 0.5], [1, 1, 0.5]); seg([1, 1, 0.5], [0, 1, 0.5]); seg([0, 1, 0.5], [0, 0, 0.5]);
       if (g === 'sword') seg([0.06, 0.06, 0.5], [0.94, 0.94, 0.5]);
+    } else if (g === 'mob') {
+      // the vanilla body parts (feet space, centred on the block) and an arrow to the front (+Z)
+      for (const [lo, hi] of this.opts.boxes || []) {
+        const a = [lo[0] + 0.5, lo[1], lo[2] + 0.5], b = [hi[0] + 0.5, hi[1], hi[2] + 0.5];
+        const k = [[a[0], a[1], a[2]], [b[0], a[1], a[2]], [b[0], b[1], a[2]], [a[0], b[1], a[2]], [a[0], a[1], b[2]], [b[0], a[1], b[2]], [b[0], b[1], b[2]], [a[0], b[1], b[2]]];
+        for (const [i, j] of [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]]) seg(k[i], k[j]);
+      }
+      seg([0.5, 0.01, 0.5], [0.5, 0.01, 1.4]); seg([0.5, 0.01, 1.4], [0.38, 0.01, 1.22]); seg([0.5, 0.01, 1.4], [0.62, 0.01, 1.22]);
     } else if (g === 'shield') {
       const x0 = 0.5 - 6 / 16, x1 = 0.5 + 6 / 16, y0 = 0.5 - 11 / 16, y1 = 0.5 + 11 / 16, z = 0.5 + 1.5 / 16;
       seg([x0, y0, z], [x1, y0, z]); seg([x1, y0, z], [x1, y1, z]); seg([x1, y1, z], [x0, y1, z]); seg([x0, y1, z], [x0, y0, z]);

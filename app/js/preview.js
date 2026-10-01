@@ -746,6 +746,26 @@ export class Preview {
     this.heldModel = data && data.length ? { mesh: this.makeMesh(data), hand } : null;
   }
 
+  // A mob model from the Models tab, drawn in place of the preview zombie,
+  // and an armour model, worn by it. Feet space, like the zombie.
+  setMobModel(data) {
+    this.swapMesh('mobModel', data);
+  }
+
+  setArmorModel(data) {
+    this.swapMesh('armorModel', data);
+  }
+
+  swapMesh(key, data) {
+    if (!this.ok) return;
+    const gl = this.gl;
+    if (this[key]) {
+      gl.deleteVertexArray(this[key].vao);
+      gl.deleteBuffer(this[key].buf);
+    }
+    this[key] = data && data.length ? this.makeMesh(data) : null;
+  }
+
   // Compiles new graph shaders. Keeps the last working ones if this fails.
   setShaders({ terrainVS, terrainFS, postFS, entityVS, entityFS, shadowFS }) {
     if (!this.ok) return { ok: false, error: this.error };
@@ -1315,11 +1335,13 @@ export class Preview {
     if (!hand) {
       set({ mesh: this.entityMeshes.chest, model: m4.translate(0, 1, -3), isBlock: true, blockEntityId: 10101 });
       const hurt = t % 4 < 0.3;
-      set({
-        mesh: this.entityMeshes.zombie, isEntity: true, entityId: 30002,
+      const zombie = {
+        mesh: this.mobModel || this.entityMeshes.zombie, isEntity: true, entityId: 30002,
         model: m4.chain(m4.translate(1.5, 1, 2.5), m4.rotY(0.6 + Math.sin(t * 0.7) * 0.15)),
         flash: hurt ? [1, 0, 0, 0.5] : [0, 0, 0, 0],
-      });
+      };
+      set(zombie);
+      if (this.armorModel) set({ ...zombie, mesh: this.armorModel });
       return;
     }
     const camToWorld = m4.invert(view);

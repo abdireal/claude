@@ -1,6 +1,6 @@
 # BlockGraph Models
 
-A small **client-side** Fabric mod for **Minecraft 1.21.11** that lets resource packs give any block or item a real 3D mesh (Wavefront OBJ) instead of boxes. BlockGraph's Models tab writes these packs for you, but you can also write them by hand.
+A small **client-side** Fabric mod for **Minecraft 1.21.11** that lets resource packs give blocks, items, chests and other block entities, mobs, players and worn armour a real 3D mesh (Wavefront OBJ) instead of boxes. BlockGraph's Models tab writes these packs for you, but you can also write them by hand.
 
 - Client side only: works on any server. Players without the mod see the fallback in your model files (see below), or the normal item or block if they don't have your resource pack either.
 - Needs Fabric Loader 0.17.3 or newer and Fabric API.
@@ -70,6 +70,33 @@ BlockGraph writes all of this for you.
 | `transform` | `{ "scale": 1, "rotation": [x, y, z], "translation": [x, y, z] }` in blocks and degrees, around the block centre. |
 
 If the OBJ file is missing or broken, the model shows a small cube with the particle texture and the log says why.
+
+## Full cubes and block entities
+
+Any block state whose model is an OBJ model gets two changes, client side only:
+
+- **It hides nothing behind it.** Stone, dirt or any other full cube with a model no longer makes its neighbours skip the faces that touch it, so a model smaller than the block leaves no holes. Sodium's cave culling also stops treating it as solid.
+- **It is drawn from its block model.** Chests, signs, beds, banners, heads and other block entities normally draw with a block entity renderer and ignore their block model. With an OBJ model the block entity renderer is skipped and the model is drawn with the chunk, so it stays still (no opening lid, sign text or banner pattern).
+
+Blockstates turn models as usual: `"facing=north"` keys for chests and wall signs, `"rotation=0"` to `"rotation=15"` for standing signs, banners and heads (models turn in 90° steps), and `"facing=north,part=head"` / `"part=foot"` for beds. Give a bed's foot half an empty OBJ model, so the vanilla bed is skipped there too, and let the head half draw the whole bed.
+
+## Mobs, players and armour
+
+List them in `assets/<namespace>/blockgraph/entities/<anything>.json`, one file per model:
+
+```json
+{ "entity": "minecraft:zombie", "model": "mypack:models/entity/knight.obj", "texture": "mypack:textures/entity/knight.png" }
+```
+
+```json
+{ "item": "minecraft:diamond_helmet", "model": "mypack:models/entity/crown.obj", "texture": "mypack:textures/entity/crown.png" }
+```
+
+- **Feet space.** The OBJ is in blocks, Y up, with the origin on the ground between the feet and the front of the mob towards +Z (its right hand towards -X).
+- **Moving parts.** Objects or groups (`o` / `g`) named after a part of the vanilla model are fastened to that part and move with the vanilla animation: `head`, `body`, `right_arm`, `left_arm`, `right_leg`, `left_leg` for humanoids, `right_hind_leg`, `left_front_leg` and so on for four-legged mobs. `Head`, `LeftArm` and `left arm` work too. Faces in any other group ride on the whole body.
+- **Mobs and players.** `"entity"` replaces how every mob of that type looks (`minecraft:player` for players). The vanilla cubes are hidden, and the mob is drawn with your texture: one texture for the whole model, UVs over all of it. Layers drawn over the vanilla body (spider eyes, creeper charge, ...) are left out. Armour, held items and capes still show.
+- **Armour.** `"item"` draws that armour piece as your model on every humanoid that wears it (players, zombies, skeletons, piglins, ...), with each group on the wearer's head, body, arms and legs.
+- **Shaders.** Mobs and armour go through Iris's entity programs, and `knight_n.png` / `knight_s.png` next to the texture are its LabPBR normal and specular maps.
 
 ## In-game test
 

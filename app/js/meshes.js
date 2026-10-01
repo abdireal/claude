@@ -766,3 +766,130 @@ export function meshFromJSON(j) {
     materials: (j.materials || []).map(({ maps, ...m }) => (maps ? { ...m, maps: mapsFromJSON(maps) } : m)),
   };
 }
+
+// ------------------------------------------------------------------- mobs
+// Body parts of vanilla mob models, as boxes in "feet space": pixels (1/16
+// block), the origin on the ground between the feet, the mob facing +Z, its
+// right hand towards -X. The BlockGraph Models mod fastens each OBJ group to
+// the vanilla part of the same name, so these parts move with the animation.
+
+const px = (a) => a.map((v) => v / 16);
+const humanoid = {
+  height: 2,
+  parts: {
+    head: [[-4, 24, -4], [4, 32, 4]],
+    body: [[-4, 12, -2], [4, 24, 2]],
+    right_arm: [[-8, 12, -2], [-4, 24, 2]],
+    left_arm: [[4, 12, -2], [8, 24, 2]],
+    right_leg: [[-4, 0, -2], [0, 12, 2]],
+    left_leg: [[0, 0, -2], [4, 12, 2]],
+  },
+};
+export const RIGS = {
+  humanoid,
+  pig: {
+    height: 0.9,
+    parts: {
+      head: [[-4, 8, 6], [4, 16, 14]],
+      body: [[-5, 6, -8], [5, 14, 8]],
+      right_hind_leg: [[-5, 0, -9], [-1, 6, -5]],
+      left_hind_leg: [[1, 0, -9], [5, 6, -5]],
+      right_front_leg: [[-5, 0, 3], [-1, 6, 7]],
+      left_front_leg: [[1, 0, 3], [5, 6, 7]],
+    },
+  },
+  cow: {
+    height: 1.4,
+    parts: {
+      head: [[-4, 16, 8], [4, 24, 14]],
+      body: [[-6, 12, -9], [6, 22, 9]],
+      right_hind_leg: [[-6, 0, -9], [-2, 12, -5]],
+      left_hind_leg: [[2, 0, -9], [6, 12, -5]],
+      right_front_leg: [[-6, 0, 4], [-2, 12, 8]],
+      left_front_leg: [[2, 0, 4], [6, 12, 8]],
+    },
+  },
+  creeper: {
+    height: 1.7,
+    parts: {
+      head: [[-4, 18, -4], [4, 26, 4]],
+      body: [[-4, 6, -2], [4, 18, 2]],
+      right_hind_leg: [[-4, 0, -6], [0, 6, -2]],
+      left_hind_leg: [[0, 0, -6], [4, 6, -2]],
+      right_front_leg: [[-4, 0, 2], [0, 6, 6]],
+      left_front_leg: [[0, 0, 2], [4, 6, 6]],
+    },
+  },
+  // Any other mob: the whole model rides on the body, turning with it.
+  whole: { height: 1.8, parts: {} },
+};
+for (const rig of Object.values(RIGS)) for (const k of Object.keys(rig.parts)) rig.parts[k] = rig.parts[k].map(px);
+
+// Mobs with a known rig. Others use "whole".
+export const MOB_RIGS = {
+  player: 'humanoid', zombie: 'humanoid', husk: 'humanoid', drowned: 'humanoid', zombie_villager: 'humanoid',
+  skeleton: 'humanoid', stray: 'humanoid', bogged: 'humanoid', wither_skeleton: 'humanoid',
+  piglin: 'humanoid', piglin_brute: 'humanoid', zombified_piglin: 'humanoid', giant: 'humanoid',
+  pig: 'pig', cow: 'cow', mooshroom: 'cow', sheep: 'cow', creeper: 'creeper',
+};
+
+export function rigOf(entityId) {
+  return RIGS[MOB_RIGS[String(entityId || '').replace(/^minecraft:/, '')]] || RIGS.whole;
+}
+
+// The part each triangle belongs to: the part box holding its centre, or
+// the nearest one. `pos` is in feet space (blocks). '' = rides on the body.
+export function rigParts(rig, pos, idx) {
+  const names = Object.keys(rig.parts);
+  const out = new Array(idx.length / 3).fill('');
+  if (!names.length) return out;
+  const dist = ([lo, hi], p) => {
+    let d = 0;
+    for (let k = 0; k < 3; k++) d += Math.max(lo[k] - p[k], 0, p[k] - hi[k]) ** 2;
+    return d;
+  };
+  for (let t = 0; t < out.length; t++) {
+    const c = [0, 0, 0];
+    for (let k = 0; k < 3; k++) {
+      const v = idx[t * 3 + k];
+      for (let j = 0; j < 3; j++) c[j] += pos[v * 3 + j] / 3;
+    }
+    let best = names[0], bd = Infinity;
+    for (const n of names) {
+      const box = rig.parts[n];
+      let d = dist(box, c);
+      if (d === 0) {
+        // inside: prefer the box whose centre is closest (overlaps at joints)
+        d = -1 / (1e-6 + Math.hypot(...[0, 1, 2].map((k) => c[k] - (box[0][k] + box[1][k]) / 2)));
+      }
+      if (d < bd) { bd = d; best = n; }
+    }
+    out[t] = best;
+  }
+  return out;
+}
+
+// An OBJ in feet space with one "o" section per body part, for the mod.
+// `pos` are feet-space positions, `uv` image-space UVs (V down).
+export function entityToObj(mesh, pos, nrm, uv, parts, title = 'model') {
+  const f5 = (v) => (Math.abs(v) < 5e-6 ? '0' : String(Math.round(v * 1e5) / 1e5));
+  const lines = [`# ${title}, made with BlockGraph. Feet space: blocks, Y up, front towards +Z.`];
+  const n = pos.length / 3;
+  for (let i = 0; i < n; i++) lines.push(`v ${f5(pos[i * 3])} ${f5(pos[i * 3 + 1])} ${f5(pos[i * 3 + 2])}`);
+  if (uv) for (let i = 0; i < n; i++) lines.push(`vt ${f5(uv[i * 2])} ${f5(1 - uv[i * 2 + 1])}`);
+  if (nrm) for (let i = 0; i < n; i++) lines.push(`vn ${f5(nrm[i * 3])} ${f5(nrm[i * 3 + 1])} ${f5(nrm[i * 3 + 2])}`);
+  const byPart = new Map();
+  parts.forEach((p, t) => { if (!byPart.has(p)) byPart.set(p, []); byPart.get(p).push(t); });
+  const corner = (v) => `${v + 1}/${uv ? v + 1 : ''}${nrm ? `/${v + 1}` : ''}`.replace(/\/$/, '');
+  for (const [part, tris] of byPart) {
+    lines.push(`o ${part || 'body_rider'}`);
+    for (const t of tris) lines.push(`f ${corner(mesh.idx[t * 3])} ${corner(mesh.idx[t * 3 + 1])} ${corner(mesh.idx[t * 3 + 2])}`);
+  }
+  return lines.join('\n') + '\n';
+}
+
+// fit.s that makes the model `height` blocks tall (fit.s scales its longest side).
+export function mobScale(mesh, height) {
+  const b = bounds(mesh.pos);
+  return Math.round((height * Math.max(...b.size) / (b.size[1] || 1)) * 1e4) / 1e4;
+}

@@ -42,7 +42,40 @@ export const USES = {
   item: 'Replace an item',
   custom: 'New item id',
   block: 'Replace a block',
+  mob: 'Replace a mob',
+  armor: 'Replace armour',
 };
+
+// Mobs and armour pieces to pick from (any id works).
+const MOBS = ['zombie', 'player', 'skeleton', 'husk', 'drowned', 'stray', 'wither_skeleton', 'piglin', 'zombified_piglin',
+  'creeper', 'pig', 'cow', 'sheep', 'mooshroom', 'villager', 'enderman', 'spider', 'chicken', 'wolf', 'cat', 'fox', 'iron_golem'];
+const ARMORS = ['leather', 'chainmail', 'iron', 'golden', 'diamond', 'netherite'].flatMap((m) => ['helmet', 'chestplate', 'leggings', 'boots'].map((p) => `${m}_${p}`)).concat('turtle_helmet');
+// Where each armour piece sits on a humanoid (feet space, blocks): [centre, size].
+const ARMOR_SLOTS = {
+  head: [[0, 1.75, 0], 0.62],
+  chest: [[0, 1.12, 0], 1.05],
+  legs: [[0, 0.55, 0], 0.85],
+  feet: [[0, 0.18, 0], 0.62],
+};
+const armorSlot = (id) => {
+  const p = String(id || '');
+  if (/(helmet|_cap|_head)$/.test(p)) return 'head';
+  if (/(leggings|_pants)$/.test(p)) return 'legs';
+  if (/boots$/.test(p)) return 'feet';
+  return 'chest';
+};
+// How a block model turns with its block: by facing (chests, wall signs,
+// furnaces), by the 16 rotations of standing signs, banners and heads, or a
+// bed's two halves.
+const TURNS = { none: 'Does not turn', facing: 'With its facing (north, east, south, west)', rotation: 'With its rotation (standing signs, banners, heads)', bed: 'As a bed (two blocks, head and foot)' };
+function autoTurn(id) {
+  const p = String(id || '').replace(/^minecraft:/, '');
+  if (/_bed$/.test(p)) return 'bed';
+  if (/wall_|chest$|shulker_box$|furnace$|smoker$|lectern$|stonecutter$|grindstone$|anvil$|campfire$/.test(p)) return 'facing';
+  if (/(_sign|_banner|_head|_skull)$/.test(p) && !/hanging/.test(p)) return 'rotation';
+  return 'none';
+}
+const turnOf = (m) => m.turn || (m.facing ? 'facing' : 'none');
 
 const ITEMS = ['diamond_sword', 'netherite_sword', 'iron_sword', 'golden_sword', 'stone_sword', 'wooden_sword', 'mace',
   'diamond_axe', 'diamond_pickaxe', 'diamond_shovel', 'diamond_hoe', 'netherite_axe', 'netherite_pickaxe', 'shield', 'stick',
@@ -59,7 +92,8 @@ const ITEM_NOTES = {
   elytra: 'Only the item changes. Elytra on a player’s back are drawn separately.',
   shield: 'Pick “Shield” under Hold like, so it raises when you block.',
 };
-const BLOCKS = ['flower_pot', 'lantern', 'soul_lantern', 'end_rod', 'lightning_rod', 'anvil', 'cauldron', 'grindstone',
+const BLOCKS = ['chest', 'trapped_chest', 'ender_chest', 'oak_sign', 'oak_wall_sign', 'red_bed', 'white_banner', 'player_head', 'skeleton_skull',
+  'stone', 'dirt', 'grass_block', 'oak_planks', 'cobblestone', 'flower_pot', 'lantern', 'soul_lantern', 'end_rod', 'lightning_rod', 'anvil', 'cauldron', 'grindstone',
   'stonecutter', 'brewing_stand', 'hopper', 'composter', 'dead_bush', 'cobweb', 'candle', 'amethyst_cluster', 'sea_pickle',
   'iron_bars', 'campfire', 'lectern', 'scaffolding', 'pointed_dripstone', 'small_amethyst_bud', 'fern', 'poppy'];
 const ENTITY_BLOCKS = /^(chest|trapped_chest|ender_chest|.*shulker_box|.*_bed|.*sign|.*banner|.*_head|.*_skull|bell|decorated_pot|conduit|beacon|enchanting_table)$/;
@@ -363,6 +397,16 @@ function addModel(mesh, { name, use = 'custom', target = '', base = 'minecraft:s
 }
 
 function poseFit(model, mesh = meshes.get(model.mesh)) {
+  if (model.use === 'mob') {
+    // As tall as the mob, standing on the floor, centred on the block.
+    const fit = { s: M.mobScale(mesh, M.rigOf(model.target).height), r: [0, 0, 0], t: [0, 0, 0] };
+    return M.sitOnFloor(mesh, normOf(model.mesh), fit);
+  }
+  if (model.use === 'armor') {
+    // On the matching part of a humanoid, a little bigger than it.
+    const [c, size] = ARMOR_SLOTS[armorSlot(model.target)];
+    return { s: size, r: [0, 0, 0], t: [c[0], c[1] - 0.5, c[2]] };
+  }
   const kind = HOLDS[model.hold]?.fit || 'item';
   let fit = M.presetFit(kind, mesh);
   if (kind === 'block') fit = M.sitOnFloor(mesh, normOf(model.mesh), fit);
@@ -567,13 +611,18 @@ function updateStage() {
     view.setModel(null, []);
     return;
   }
-  view.setOptions({ guide: HOLDS[m.hold]?.guide || 'block' });
+  const entity = m.use === 'mob' || m.use === 'armor';
+  view.setOptions(entity
+    ? { guide: 'mob', boxes: Object.values((m.use === 'armor' ? M.RIGS.humanoid : M.rigOf(m.target)).parts) }
+    : { guide: HOLDS[m.hold]?.guide || 'block', boxes: null });
   view.setModel(placedMesh(m), materialViews(m));
   $('#model-title').textContent = m.name;
   const mesh = meshes.get(m.mesh);
   $('#model-sub').textContent = `${mesh.mat.length.toLocaleString('en')} triangles · ${quadCount(m.mesh).toLocaleString('en')} quads in game`;
-  const g = HOLDS[m.hold]?.guide;
-  $('#model-legend').textContent = g === 'sword' || g === 'item'
+  const g = entity ? 'mob' : HOLDS[m.hold]?.guide;
+  $('#model-legend').textContent = g === 'mob'
+    ? 'Gold boxes: the body parts of the vanilla model. The arrow points to the front. One block is the blue box.'
+    : g === 'sword' || g === 'item'
     ? 'Blue box: one block. Gold square: where a vanilla item sprite sits.'
     : g === 'shield' ? 'Blue box: one block. Gold outline: the vanilla shield plate.' : 'Blue box: one block.';
 }
@@ -590,6 +639,8 @@ function updatePreview() {
   if (!pm) {
     preview.setModel(null);
     preview.setHeldModel?.(null);
+    preview.setMobModel?.(null);
+    preview.setArmorModel?.(null);
     for (const t of shownTiles) preview.setTileOverride(t, null);
     shownTiles.clear();
     showTileMaps(new Map());
@@ -624,10 +675,12 @@ function updatePreview() {
   });
   showTileMaps(mapsOfTile);
 
-  const held = m.use !== 'block' && !!preview.setHeldModel;
-  const at = held ? [-0.5, -0.5, -0.5] : MODEL_SPOT;
+  const worn = (m.use === 'mob' || m.use === 'armor') && !!preview.setMobModel;
+  const held = !worn && m.use !== 'block' && !!preview.setHeldModel;
+  // Mobs and armour are in feet space, on the preview zombie.
+  const at = worn ? [-0.5, 0, -0.5] : held ? [-0.5, -0.5, -0.5] : MODEL_SPOT;
   const centre = [MODEL_SPOT[0] + 0.5, MODEL_SPOT[1] + 0.5, MODEL_SPOT[2] + 0.5];
-  const [blockLight, sky] = held ? [0, 1] : sceneLight(...centre);
+  const [blockLight, sky] = held || worn ? [0, 1] : sceneLight(...centre);
   const tris = pm.mat.length;
   const data = new Float32Array(tris * 3 * 16);
   let o = 0;
@@ -654,18 +707,15 @@ function updatePreview() {
         pm.pos[i * 3] + at[0], pm.pos[i * 3 + 1] + at[1], pm.pos[i * 3 + 2] + at[2],
         n[0], n[1], n[2], uv[0], uv[1],
         tint[0] * shade, tint[1] * shade, tint[2] * shade, 1,
-        mat.glow ? 1 : blockLight, sky, held ? 0 : 4, 0,
+        mat.glow ? 1 : blockLight, sky, held || worn ? 0 : 4, 0,
       ], o);
       o += 16;
     }
   }
-  if (held) {
-    preview.setModel(null);
-    preview.setHeldModel(data, m.hold === 'shield' ? 'off' : 'main');
-  } else {
-    preview.setHeldModel?.(null);
-    preview.setModel(data);
-  }
+  preview.setModel(!held && !worn ? data : null);
+  preview.setHeldModel?.(held ? data : null, m.hold === 'shield' ? 'off' : 'main');
+  preview.setMobModel?.(worn && m.use === 'mob' ? data : null);
+  preview.setArmorModel?.(worn && m.use === 'armor' ? data : null);
 }
 
 // The maps one material shows in the preview: { key, n, s } with pixels, or
@@ -767,6 +817,8 @@ function useSummary(m, keys) {
   const ns = packNamespace(ctx.state.packName);
   if (m.use === 'item') return `replaces ${(fullId(m.target) || '?').replace('minecraft:', '')}`;
   if (m.use === 'block') return `block ${(fullId(m.target) || '?').replace('minecraft:', '')}`;
+  if (m.use === 'mob') return `mob ${(fullId(m.target) || '?').replace('minecraft:', '')}`;
+  if (m.use === 'armor') return `armour ${(fullId(m.target) || '?').replace('minecraft:', '')}`;
   return `${ns}:${keys.get(m.id)}`;
 }
 
@@ -859,19 +911,23 @@ function targetNotes(m) {
   const notes = [];
   let bad = false;
   if (!id) {
-    notes.push(m.use === 'block' ? 'Type a block id, like flower_pot.' : 'Type an item id, like diamond_sword.');
+    notes.push({ block: 'Type a block id, like flower_pot.', mob: 'Type a mob id, like zombie.', armor: 'Type an armour item id, like diamond_helmet.' }[m.use] || 'Type an item id, like diamond_sword.');
     bad = true;
+  } else if (m.use === 'mob') {
+    notes.push(`Every ${path.replace(/_/g, ' ')} looks like this model, with the model's texture.`);
+    if (Object.keys(M.rigOf(id).parts).length) notes.push('The parts of your model in each gold box move with that body part, so it walks and looks around like the vanilla mob.');
+    else notes.push('BlockGraph has no body-part boxes for this mob yet, so the whole model turns and moves with its body, without walking animation.');
+  } else if (m.use === 'armor') {
+    notes.push(`Players, zombies, skeletons and other humanoids wearing ${path.replace(/_/g, ' ')} show this model. The parts in each gold box move with that body part.`);
   } else if (m.use === 'item') {
     notes.push(`Every ${path.replace(/_/g, ' ')} looks like this model, for everyone who has the mod and your resource pack.`);
     if (ITEM_NOTES[path]) notes.push(ITEM_NOTES[path]);
   } else if (m.use === 'block') {
     notes.push(`Every ${path.replace(/_/g, ' ')} in the world draws this model instead. Its hitbox stays the same.`);
     if (ENTITY_BLOCKS.test(path)) {
-      notes.push('This block is drawn by a block entity renderer, which a model cannot replace. Pick another block.');
-      bad = true;
+      notes.push('The model takes the place of its block entity renderer, so it stays still: no opening lid, sign text or banner pattern.');
     } else if (FULL_BLOCKS.test(path)) {
-      notes.push('This is a full cube, so neighbouring blocks hide their faces against it and you will see holes around the model. Pick a block that is not a full cube, like flower_pot or lantern.');
-      bad = true;
+      notes.push('A full cube: with the model, neighbouring blocks keep drawing the faces that touch it, so there are no holes.');
     }
   }
   const h = el('span', `field-hint${bad ? ' bad' : ''}`, notes.join(' '));
@@ -920,11 +976,17 @@ function renderProps() {
       m.use = k;
       if (k === 'block') {
         if (!fullId(m.target) || was !== 'block') m.target = 'minecraft:flower_pot';
-        if (m.hold !== 'block') { m.hold = 'block'; if (mesh) m.fit = poseFit(m); }
+        if (m.hold !== 'block') m.hold = 'block';
+        m.turn = autoTurn(m.target);
+      } else if (k === 'mob') {
+        m.target = 'minecraft:zombie';
+      } else if (k === 'armor') {
+        m.target = 'minecraft:diamond_helmet';
       } else {
-        if (was === 'block' || !fullId(m.target)) m.target = 'minecraft:diamond_sword';
-        if (m.hold === 'block') { m.hold = 'item'; if (mesh) m.fit = poseFit(m); }
+        if (!['item', 'custom'].includes(was) || !fullId(m.target)) m.target = 'minecraft:diamond_sword';
+        if (!HOLDS[m.hold] || m.hold === 'block') m.hold = 'item';
       }
+      if (mesh && (k !== was)) m.fit = poseFit(m);
       commit(true);
     });
     seg.append(b);
@@ -962,33 +1024,44 @@ function renderProps() {
   } else {
     const t = el('input', 'in-text mono');
     t.value = (m.target || '').replace(/^minecraft:/, '');
-    t.placeholder = m.use === 'block' ? 'flower_pot' : 'diamond_sword';
+    const kind = { block: ['flower_pot', 'model-blocks', 'Block'], mob: ['zombie', 'model-mobs', 'Mob'], armor: ['diamond_helmet', 'model-armor', 'Armour item'] }[m.use] || ['diamond_sword', 'model-items', 'Item'];
+    t.placeholder = kind[0];
     t.spellcheck = false;
-    t.setAttribute('list', m.use === 'block' ? 'model-blocks' : 'model-items');
+    t.setAttribute('list', kind[1]);
     datalist('model-items', ITEMS);
     datalist('model-blocks', BLOCKS);
+    datalist('model-mobs', MOBS);
+    datalist('model-armor', ARMORS);
     t.addEventListener('change', () => {
       const v = fullId(t.value);
       if (!v) { ctx.toast('Use lowercase letters, numbers and _ like diamond_sword.'); t.value = m.target.replace(/^minecraft:/, ''); return; }
+      const was = m.target;
       m.target = v;
       if (m.use === 'item' && v === 'minecraft:shield' && m.hold !== 'shield') m.hold = 'shield';
+      if (m.use === 'block') m.turn = autoTurn(v);
+      // A different mob or armour slot: refit to its size.
+      if (mesh && ((m.use === 'mob' && M.rigOf(was) !== M.rigOf(v)) || (m.use === 'armor' && armorSlot(was) !== armorSlot(v)))) m.fit = poseFit(m);
       commit(true);
     });
-    box.append(field(m.use === 'block' ? 'Block' : 'Item', t, targetNotes(m)));
+    box.append(field(kind[2], t, targetNotes(m)));
     if (m.use === 'block') {
-      const sw = el('label', 'ctl-switch');
-      const cb = el('input');
-      cb.type = 'checkbox';
-      cb.checked = m.facing;
-      cb.addEventListener('change', () => { m.facing = cb.checked; commit(); });
-      sw.append(cb, el('span', 'switch'), el('span', null, 'Turn with the block’s facing'));
-      sw.title = 'Only for blocks that have a facing property (north, east, south, west), like a furnace or a lectern';
-      box.append(sw);
+      const turn = el('select', 'in-select');
+      turn.setAttribute('aria-label', 'Turn with the block');
+      for (const [k, label] of Object.entries(TURNS)) {
+        const o = el('option', null, label);
+        o.value = k;
+        turn.append(o);
+      }
+      turn.value = turnOf(m);
+      turn.addEventListener('change', () => { m.turn = turn.value; m.facing = turn.value === 'facing'; commit(); });
+      box.append(field('Turn with the block', turn, turnOf(m) === 'bed'
+        ? 'Model the whole bed facing north: the pillow end in the blue block, the foot end one block towards +Z.'
+        : 'Model it facing north (towards -Z). The game turns it to match each block.'));
     }
   }
 
   // hold
-  if (m.use !== 'block') {
+  if (m.use === 'item' || m.use === 'custom') {
     const hold = el('select', 'in-select');
     hold.setAttribute('aria-label', 'Hold like');
     for (const [k, h] of Object.entries(HOLDS)) {
@@ -1031,8 +1104,15 @@ function renderProps() {
       b.addEventListener('click', fn);
       acts.append(b);
     };
-    const holdName = (HOLDS[m.hold]?.label || 'item').split(' (')[0].toLowerCase();
-    btn(`Pose as ${holdName}`, 'Size and turn the model for this hold, with its longest side along the pose', () => set(poseFit(m)));
+    if (m.use === 'mob') {
+      btn('Fit to the mob', 'As tall as the mob, standing on the floor in the middle of the block', () => set(poseFit(m)));
+      btn('Face front', 'Turn it 90° at a time until its front points along the arrow (+Z)', () => { const r = m.fit.r.slice(); r[1] = ((r[1] + 90 + 180) % 360) - 180; set({ ...m.fit, r }); });
+    } else if (m.use === 'armor') {
+      btn('Fit to the body part', 'Size and place it on the head, body, legs or feet, from the armour item', () => set(poseFit(m)));
+    } else {
+      const holdName = (HOLDS[m.hold]?.label || 'item').split(' (')[0].toLowerCase();
+      btn(`Pose as ${holdName}`, 'Size and turn the model for this hold, with its longest side along the pose', () => set(poseFit(m)));
+    }
     btn('Sit on floor', 'Move it so its lowest point touches the bottom of the block', () => set(M.sitOnFloor(mesh, normOf(m.mesh), m.fit)));
     for (const [i, a] of [[0, 'X'], [1, 'Y'], [2, 'Z']]) {
       btn(`↻ ${a}`, `Turn 90° around ${a}`, () => { const r = m.fit.r.slice(); r[i] = ((r[i] + 90 + 180) % 360) - 180; set({ ...m.fit, r }); });
@@ -1214,6 +1294,7 @@ export async function modelPackFiles(ns) {
   const mapsWritten = new Set();
   const itemDefs = new Map(); // item id -> model, to spot two models on one item
   const blockDefs = new Map();
+  const entityDefs = new Map();
   for (const m of ctx.state.models) {
     const mesh = meshes.get(m.mesh);
     if (!mesh) {
@@ -1221,6 +1302,10 @@ export async function modelPackFiles(ns) {
       continue;
     }
     const key = keys.get(m.id);
+    if (m.use === 'mob' || m.use === 'armor') {
+      await entityPackFiles(m, mesh, ns, key, files, problems, entityDefs);
+      continue;
+    }
     const dir = m.use === 'block' ? 'block' : 'item';
     const hold = HOLDS[m.use === 'block' ? 'block' : m.hold] || HOLDS.item;
     const slots = slotNames(m.mats);
@@ -1305,13 +1390,117 @@ export async function modelPackFiles(ns) {
     if (m.use === 'block') {
       if (blockDefs.has(target)) problems.push(`Two models replace the block ${target}.`);
       blockDefs.set(target, m.name);
-      const variants = m.facing
-        ? { 'facing=north': { model: ref }, 'facing=east': { model: ref, y: 90 }, 'facing=south': { model: ref, y: 180 }, 'facing=west': { model: ref, y: 270 } }
-        : { '': { model: ref } };
+      const turn = turnOf(m);
+      const facings = [['north', 0], ['east', 90], ['south', 180], ['west', 270]];
+      const turned = (r, y) => (y ? { model: r, y } : { model: r });
+      let variants = { '': { model: ref } };
+      if (turn === 'facing') {
+        variants = Object.fromEntries(facings.map(([f, y]) => [`facing=${f}`, turned(ref, y)]));
+      } else if (turn === 'rotation') {
+        // 16 rotations, 0 = facing south; block models turn in 90° steps.
+        variants = Object.fromEntries(Array.from({ length: 16 }, (_, r) => [`rotation=${r}`, turned(ref, (180 + 90 * (Math.round(r / 4) % 4)) % 360)]));
+      } else if (turn === 'bed') {
+        // The head half draws the whole bed; the foot half draws an empty
+        // model, which still tells the mod to skip the vanilla bed there.
+        const empty = `${ns}:block/${key}_empty`;
+        files[`assets/${ns}/models/block/${key}_empty.obj`] = '# Empty: the head half of the bed draws the whole model.\n';
+        files[`assets/${ns}/models/block/${key}_empty.json`] = json({ 'fabric:type': { id: 'blockgraph:obj', optional: true }, obj: `${ns}:models/block/${key}_empty.obj`, parent: 'minecraft:block/block', textures: { particle: textures.particle } });
+        variants = Object.fromEntries(facings.flatMap(([f, y]) => [[`facing=${f},part=head`, turned(ref, y)], [`facing=${f},part=foot`, turned(empty, y)]]));
+      }
       files[`assets/${tns}/blockstates/${tpath}.json`] = json({ variants });
     }
   }
   return { files, problems, count: modelCount() };
+}
+
+// Mobs and armour: one texture (several materials are packed side by side),
+// an OBJ in feet space with one group per body part, and the file the mod
+// reads (assets/<ns>/blockgraph/entities/<key>.json).
+async function entityPackFiles(m, mesh, ns, key, files, problems, defs) {
+  const target = fullId(m.target);
+  if (!target) {
+    problems.push(`“${m.name}” has no ${m.use === 'mob' ? 'mob' : 'armour item'} to replace, so it was left out.`);
+    return;
+  }
+  if (defs.has(target)) problems.push(`“${m.name}” and “${defs.get(target)}” both replace ${target}. Only one of them shows in game.`);
+  defs.set(target, m.name);
+
+  // texture cells: one per texture (or plain colour) the materials use
+  const cells = [];
+  const cellOf = new Map();
+  const matCell = m.mats.map((mat, i) => {
+    const img = mat.tex && TX.bakedImage(mat.tex);
+    const k = img ? mat.tex : `colour:${i}`;
+    if (!cellOf.has(k)) {
+      cellOf.set(k, cells.length);
+      cells.push({ img: img || solidImage(mesh.materials[i]?.color || [0.8, 0.8, 0.8]), mat: i });
+    }
+    return cellOf.get(k);
+  });
+  const n = cells.length;
+  const N = Math.ceil(Math.sqrt(n));
+  const cell = n === 1 ? cells[0].img.width : Math.min(Math.max(...cells.map((c) => c.img.width)), Math.floor(2048 / N));
+  const side = N * cell;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = side;
+  const g = canvas.getContext('2d');
+  g.imageSmoothingEnabled = true;
+  const tmp = document.createElement('canvas');
+  cells.forEach((c, j) => {
+    tmp.width = c.img.width;
+    tmp.height = c.img.height;
+    tmp.getContext('2d').putImageData(c.img, 0, 0);
+    g.drawImage(tmp, (j % N) * cell, Math.floor(j / N) * cell, cell, cell);
+  });
+  files[`assets/${ns}/textures/entity/${key}.png`] = await TX.imageDataToPng(g.getImageData(0, 0, side, side));
+
+  // material maps, packed the same way
+  const nAtlas = PBR.solidMap(PBR.FLAT_NORMAL, side, side);
+  const sAtlas = PBR.solidMap(PBR.NO_SPECULAR, side, side);
+  let anyN = false, anyS = false;
+  const put = (atlas, src, j, isNormal) => {
+    const px = PBR.boxDownscale(src.data, src.width, src.height, cell, cell, isNormal);
+    const x0 = (j % N) * cell, y0 = Math.floor(j / N) * cell;
+    for (let y = 0; y < cell; y++) atlas.set(px.subarray(y * cell * 4, (y + 1) * cell * 4), ((y0 + y) * side + x0) * 4);
+  };
+  for (const [j, c] of cells.entries()) {
+    const surface = surfaceOf(m, c.mat);
+    const maps = surface === 'file' ? mesh.materials[c.mat]?.maps : null;
+    if (maps?.n) { put(nAtlas, await decodePng(maps.n), j, true); anyN = true; }
+    if (maps?.s) { put(sAtlas, await decodePng(maps.s), j, false); anyS = true; }
+    const px = !maps ? PBR.flatSpecular(surface, m.mats[c.mat].glow) : null;
+    if (px) { put(sAtlas, { data: PBR.solidMap(px, 1, 1), width: 1, height: 1 }, j, false); anyS = true; }
+  }
+  if (anyN) files[`assets/${ns}/textures/entity/${key}_n.png`] = await encodePng(nAtlas, side, side);
+  if (anyS) files[`assets/${ns}/textures/entity/${key}_s.png`] = await encodePng(sAtlas, side, side);
+
+  // the mesh in feet space, one vertex per corner so every material keeps its own UVs
+  const pm = placedMesh(m);
+  const tris = pm.mat.length;
+  const pos = new Float32Array(tris * 9);
+  const nrm = pm.nrm ? new Float32Array(tris * 9) : null;
+  const uv = pm.uv ? new Float32Array(tris * 6) : null;
+  const idx = new Uint32Array(tris * 3);
+  const clamp = (v) => Math.max(0, Math.min(1, v));
+  for (let t = 0; t < tris; t++) {
+    const j = matCell[pm.mat[t]] ?? 0;
+    const col = j % N, row = Math.floor(j / N);
+    for (let k = 0; k < 3; k++) {
+      const v = pm.idx[t * 3 + k], o = t * 3 + k;
+      idx[o] = o;
+      pos.set([pm.pos[v * 3] - 0.5, pm.pos[v * 3 + 1], pm.pos[v * 3 + 2] - 0.5], o * 3);
+      if (nrm) nrm.set([pm.nrm[v * 3], pm.nrm[v * 3 + 1], pm.nrm[v * 3 + 2]], o * 3);
+      if (uv) uv.set(n === 1 ? [pm.uv[v * 2], pm.uv[v * 2 + 1]] : [(col + clamp(pm.uv[v * 2])) / N, (row + clamp(pm.uv[v * 2 + 1])) / N], o * 2);
+    }
+  }
+  const rig = m.use === 'armor' ? M.RIGS.humanoid : M.rigOf(target);
+  const parts = M.rigParts(rig, pos, idx);
+  files[`assets/${ns}/models/entity/${key}.obj`] = M.entityToObj({ idx }, pos, nrm, uv, parts, m.name);
+  files[`assets/${ns}/blockgraph/entities/${key}.json`] = json({
+    [m.use === 'mob' ? 'entity' : 'item']: target,
+    model: `${ns}:models/entity/${key}.obj`,
+    texture: `${ns}:textures/entity/${key}.png`,
+  });
 }
 
 // --------------------------------------------------------- graph files

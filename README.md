@@ -92,6 +92,8 @@ Minecraft can only build models out of boxes. The **BlockGraph Models** mod in [
 
 - **Client side only.** It changes how things look, not what they are, so it works on any server, vanilla ones included. Players without your resource pack see the normal item or block. Players with the pack but without the mod see a fallback that BlockGraph writes into the pack: the normal item sprite, or a textured box for blocks and shields.
 - **Fabric 1.21.11.** It needs Fabric Loader and Fabric API, and works with Sodium and Iris. Model blocks are drawn by the normal block renderer, so your Blocks shader runs on them.
+- **Mobs, players and armour.** *Replace a mob* or *Replace armour* in the Models tab: BlockGraph splits your model into the mob's body parts (head, body, arms, legs), so it walks and looks around with the vanilla animation, and packs its textures into one. Armour shows on every humanoid that wears it.
+- **Chests, signs, beds, banners, heads and full cubes.** Blocks with a model are drawn from it, never from their block entity renderer, and neighbours keep the faces that touch them, so even stone or dirt can be replaced without holes.
 - **Any item or block.** Replace every diamond sword, give a model to any item with the `item_model` component (`/give @p stick[minecraft:item_model="mypack:katana"]`), show it at any size with an item display, or replace a non-full block such as a flower pot or lantern.
 
 To use it:
@@ -103,9 +105,9 @@ To use it:
 What models cannot do:
 
 - Add new blocks or items. Those need the server, so models replace how existing ones look.
-- Change hitboxes, or blocks drawn by block entity renderers (chests, signs, beds, banners, heads).
+- Change hitboxes.
+- Animate block entities: a chest, sign, bed, banner or head with a model stays still (no opening lid, sign text or banner pattern).
 - Animate. Bows, crossbows, compasses and clocks show one model the whole time.
-- Replacing a full cube (like stone) leaves holes, because neighbouring blocks hide their faces against it. Use non-full blocks.
 - Material maps: glTF normal, metal/roughness, occlusion and emission maps (and OBJ `map_Bump`, `Pr`, `Pm`, `map_Pr`, `map_Pm`, `Ke`, `map_Ke`) become LabPBR `_n` and `_s` textures next to the model's textures. Each material also has a *Surface* choice (from the file, matte, glossy, polished or brushed metal, gem) for models without maps. A shader reads them with Material Maps.
 - Shaders: item models (in hand, on the ground, in item displays) go through the Items & Entities graph, and block models through the Blocks graph, where **Block Type → Custom Models** singles them out. The live preview shows item models in your hand and block models on the grass.
 
