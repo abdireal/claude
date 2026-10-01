@@ -1,13 +1,14 @@
 // BlockGraph app shell: wires the node canvas, the live preview, the inspector,
 // the library, presets, undo, saving and the Iris pack export together.
 
-import { NODE_DEFS, CATEGORIES, BINDS, rgbToHex, hexToLinear, normStops } from './nodes.js';
+import { NODE_DEFS, CATEGORIES, BINDS, rgbToHex, hexToLinear, normStops, allowedIn } from './nodes.js';
 import { defaultParams, collectSettings, inferTypes } from './codegen.js';
 import { buildPreview, buildIris, sliderValues, buildNodePreview, previewableNode, PREVIEW_TILE, choiceOptions, choiceIndex } from './targets.js';
 import { GraphEditor } from './editor.js';
 import { Preview } from './preview.js';
 import { PRESETS } from './presets.js';
 import { makeZip } from './zip.js';
+import * as TX from './textures.js';
 
 const STORE_KEY = 'blockgraph:v1:state';
 const WELCOME_KEY = 'blockgraph:v1:welcomed';
@@ -22,7 +23,7 @@ const el = (tag, cls, text) => {
 };
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
-  set(k, v) { try { localStorage.setItem(k, v); } catch { /* storage unavailable */ } },
+  set(k, v) { try { localStorage.setItem(k, v); return true; } catch { return false; } },
 };
 
 const downloadsReady = window.claude && typeof window.claude.use === 'function'
@@ -38,6 +39,10 @@ const GRAPH_INFO = {
     name: 'Post FX',
     caption: 'Runs once on the finished screen image. Exports to composite.',
   },
+  texture: {
+    name: 'Texture',
+    caption: 'Builds a texture pixel by pixel. It can replace a Minecraft texture (resource pack) or feed shaders via Image Texture.',
+  },
 };
 
 // ---------------------------------------------------------------- state
@@ -48,7 +53,22 @@ const state = {
   views: { terrain: null, post: null },
   packName: 'My BlockGraph Pack',
   presetId: 'waving',
+  textures: [],
+  texSel: null,
+  texNext: 1,
 };
+const EMPTY_GRAPH = { nodes: [], links: [], nextId: 1 };
+
+// The graph the canvas edits: a shader graph, or the selected texture's graph.
+function currentGraph() {
+  if (state.kind !== 'texture') return state.graphs[state.kind];
+  const t = TX.selectedTexture();
+  return t && t.kind === 'graph' ? t.graph : EMPTY_GRAPH;
+}
+
+function viewKey() {
+  return state.kind === 'texture' ? `tex:${TX.selectedTexture()?.id || ''}` : state.kind;
+}
 let history = [];
 let historyIndex = -1;
 let showPreviews = true;
@@ -59,7 +79,7 @@ let clipboard = null;
 let lastPointer = null;
 
 function snapshot() {
-  return JSON.stringify({ graphs: state.graphs, packName: state.packName });
+  return JSON.stringify({ graphs: state.graphs, packName: state.packName, textures: state.textures, texSel: state.texSel, texNext: state.texNext });
 }
 
 function pushHistory() {
@@ -77,8 +97,14 @@ function restore(s) {
   const data = JSON.parse(s);
   state.graphs = data.graphs;
   state.packName = data.packName || state.packName;
-  editor.load(state.graphs[state.kind], state.views[state.kind]);
+  state.textures = data.textures || [];
+  state.texSel = data.texSel || null;
+  state.texNext = Math.max(state.texNext, data.texNext || 1);
+  TX.syncRegistry();
+  editor.load(currentGraph(), state.views[viewKey()]);
+  syncTextureView();
   refreshAll();
+  TX.loadAll();
 }
 
 function undo() {
@@ -108,7 +134,11 @@ let saveTimer = 0;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    store.set(STORE_KEY, JSON.stringify({ graphs: state.graphs, packName: state.packName, kind: state.kind, presetId: state.presetId }));
+    const ok = store.set(STORE_KEY, JSON.stringify({ graphs: state.graphs, packName: state.packName, kind: state.kind, presetId: state.presetId, textures: state.textures, texSel: state.texSel, texNext: state.texNext }));
+    if (ok === false && !save.warned) {
+      save.warned = true;
+      toast('Too big to autosave in this browser. Save a graph file from Export to keep your work.');
+    }
     const s = $('#save-state');
     if (s) {
       s.textContent = 'Saved in this browser';
@@ -130,8 +160,11 @@ function loadInitial() {
       if (validGraphs(d.graphs)) {
         state.graphs = d.graphs;
         state.packName = d.packName || state.packName;
-        state.kind = d.kind === 'post' ? 'post' : 'terrain';
+        state.kind = ['post', 'texture'].includes(d.kind) ? d.kind : 'terrain';
         state.presetId = d.presetId || null;
+        state.textures = Array.isArray(d.textures) ? d.textures : [];
+        state.texSel = d.texSel || null;
+        state.texNext = d.texNext || state.textures.length + 1;
         return;
       }
     } catch { /* fall through to the default preset */ }
@@ -153,6 +186,13 @@ function scheduleCompile(delay = 120) {
 }
 
 function compileNow() {
+  if (state.kind === 'texture') {
+    const t = TX.selectedTexture();
+    if (t && t.kind === 'graph') {
+      TX.bake(t);
+      renderTexErrors(t);
+    }
+  }
   const built = buildPreview(state.graphs);
   lastErrors = built.errors;
   glErrors = null;
@@ -175,7 +215,7 @@ function liveSettings() {
 
 function updateNodePreviews() {
   if (!preview.ok) return;
-  const g = state.graphs[state.kind];
+  const g = currentGraph();
   if (!showPreviews) {
     preview.setNodePreviews([], PREVIEW_TILE);
     return;
@@ -184,13 +224,13 @@ function updateNodePreviews() {
   for (const n of g.nodes) {
     if (!previewableNode(NODE_DEFS[n.type])) continue;
     try {
-      const np = buildNodePreview(state.graphs, state.kind, n.id);
+      const np = buildNodePreview({ ...state.graphs, texture: g }, state.kind, n.id);
       items.push({ id: n.id, src: np.src, animated: np.animated });
     } catch { /* a broken node simply gets no thumbnail */ }
   }
   const ids = new Set(g.nodes.map((n) => n.id));
   previewImages = new Map([...previewImages].filter(([id]) => ids.has(id)));
-  preview.setNodePreviews(items, PREVIEW_TILE);
+  preview.setNodePreviews(items, PREVIEW_TILE, TX.selectedTexture()?.size || 16);
 }
 
 function paintPreviews() {
@@ -251,7 +291,7 @@ const editor = new GraphEditor($('#canvas'), {
     renderInspector();
   },
   onView(v) {
-    state.views[state.kind] = v;
+    state.views[viewKey()] = v;
   },
   onRequestSearch(at) {
     openSearch(at);
@@ -260,6 +300,8 @@ const editor = new GraphEditor($('#canvas'), {
     return [...collectSettings(state.graphs).settings.keys()];
   },
   showPreviews: () => showPreviews,
+  textureList: (kind) => TX.textureList(kind),
+  defaultTexture: (kind) => TX.defaultTexture(kind),
   onRendered: () => paintPreviews(),
   toast,
 });
@@ -287,7 +329,7 @@ if (!preview.ok) {
 
 // Spreads out a freshly loaded graph once its nodes (and previews) have a size.
 function layoutIfNeeded() {
-  const g = state.graphs[state.kind];
+  const g = currentGraph();
   if (!g.needsLayout) return;
   requestAnimationFrame(() => {
     if (editor.graph !== g) return;
@@ -299,15 +341,20 @@ function layoutIfNeeded() {
 }
 
 function switchGraph(kind) {
-  if (kind === state.kind && editor.graph === state.graphs[kind]) return;
+  if (kind === state.kind && editor.graph === currentGraph()) return;
   state.kind = kind;
+  if (kind === 'texture' && !state.textures.length) {
+    TX.newTexture('stone');
+    pushHistory();
+  }
   for (const b of document.querySelectorAll('.graph-tab')) {
     const on = b.dataset.kind === kind;
     b.classList.toggle('active', on);
     b.setAttribute('aria-selected', on ? 'true' : 'false');
   }
-  const firstTime = !state.views[kind];
-  editor.load(state.graphs[kind], state.views[kind]);
+  const firstTime = !state.views[viewKey()];
+  editor.load(currentGraph(), state.views[viewKey()]);
+  syncTextureView();
   if (firstTime) requestAnimationFrame(() => editor.frameAll());
   $('#graph-caption').textContent = GRAPH_INFO[kind].caption;
   renderLibrary();
@@ -316,7 +363,46 @@ function switchGraph(kind) {
   previewImages = new Map();
   updateNodePreviews();
   layoutIfNeeded();
+  renderStatus();
   save();
+}
+
+// Shows or hides the Textures panel and the note for uploaded images.
+function syncTextureView() {
+  const t = TX.selectedTexture();
+  const isImage = state.kind === 'texture' && t && t.kind === 'image';
+  $('#image-note').hidden = !isImage;
+  if (isImage) $('#image-note-title').textContent = t.name;
+  document.querySelector('.app').classList.toggle('mode-texture', state.kind === 'texture');
+  TX.renderPanel();
+}
+
+function selectTexture(id) {
+  state.texSel = id;
+  if (state.kind === 'texture') {
+    const firstTime = !state.views[viewKey()];
+    editor.load(currentGraph(), state.views[viewKey()]);
+    if (firstTime) requestAnimationFrame(() => editor.frameAll());
+    layoutIfNeeded();
+    previewImages = new Map();
+    updateNodePreviews();
+    renderInspector();
+  }
+  syncTextureView();
+  save();
+}
+
+function onTexturesChanged() {
+  TX.syncRegistry();
+  editor.render();
+  scheduleCompile();
+  renderStatus();
+  if (state.kind !== 'texture') renderInspector();
+}
+
+function renderTexErrors(t) {
+  const err = TX.bakeErrors.get(t.id);
+  editor.setErrors(err ? [{ node: editor.graph.nodes.find((n) => NODE_DEFS[n.type]?.isOutput)?.id, msg: 'This texture graph does not compile. See the Textures panel.' }] : []);
 }
 
 function renderTabsBadges() {
@@ -331,7 +417,7 @@ function renderTabsBadges() {
 // ------------------------------------------------------------- library
 
 function nodeAllowed(def, kind) {
-  return !def.isOutput && (!def.graphs || def.graphs.includes(kind));
+  return allowedIn(def, kind);
 }
 
 function matches(def, q) {
@@ -388,6 +474,10 @@ function renderLibrary() {
 
 let addOffset = 0;
 function addAtCenter(type) {
+  if (state.kind === 'texture' && TX.selectedTexture()?.kind !== 'graph') {
+    toast('Uploaded images have no node graph. Pick or create a node texture first.');
+    return;
+  }
   const [cx, cy] = editor.center();
   addOffset = (addOffset + 24) % 120;
   const n = editor.addNode(type, cx - 90 + addOffset, cy - 50 + addOffset);
@@ -706,6 +796,29 @@ function renderNodeInspector(box, node) {
         }
       } else if (p.kind === 'gradient') {
         sec.append(gradientEditor(normStops(P[p.id]), (stops) => { node.params[p.id] = stops; commit(); renderInspector(); }));
+      } else if (p.kind === 'texture') {
+        const sel = el('select', 'in-select');
+        const none = el('option', null, 'Choose a texture…');
+        none.value = '';
+        sel.append(none);
+        for (const t of TX.textureList(state.kind)) {
+          const o = el('option', null, t.name);
+          o.value = t.id;
+          sel.append(o);
+        }
+        sel.value = P[p.id] || '';
+        sel.addEventListener('change', () => { node.params[p.id] = sel.value; commit(); });
+        const hint = state.kind === 'texture'
+          ? 'Texture graphs can read uploaded images. Upload one in the Textures panel.'
+          : 'Build or upload textures in the Textures tab. Magenta means no texture is picked.';
+        sec.append(field(p.name, sel, hint));
+        const open = el('button', 'btn ghost small', 'Open Textures tab');
+        open.type = 'button';
+        open.addEventListener('click', () => {
+          if (P[p.id] && TX.texById(P[p.id])) state.texSel = P[p.id];
+          switchGraph('texture');
+        });
+        sec.append(open);
       }
     }
     box.append(sec);
@@ -818,6 +931,26 @@ function gradientEditor(stops, onCommit) {
 
 function renderGraphInspector(box) {
   const kind = state.kind;
+  if (kind === 'texture') {
+    const t = TX.selectedTexture();
+    box.append(el('p', 'insp-eyebrow', 'Texture graph'), el('h2', 'insp-title', t ? t.name : 'Textures'), el('p', 'insp-desc', GRAPH_INFO.texture.caption));
+    const sec = el('section', 'insp-sec');
+    sec.append(el('h3', null, 'How it works'));
+    const ul = el('ul', 'tips');
+    for (const [a, b] of [
+      ['Pixels', 'Every pixel runs the graph once. Texture Coordinate gives its UV and pixel position.'],
+      ['Blender nodes', 'Brick, Wave, Magic, Musgrave, Voronoi and Noise work like their Blender versions.'],
+      ['Paint', 'Paint over the result in the panel above. The eraser shows the nodes again.'],
+      ['Use it', 'Set “Replaces” to put it in the resource pack, or pick it in an Image Texture node.'],
+    ]) {
+      const li = el('li');
+      li.append(el('strong', null, a), el('span', null, b));
+      ul.append(li);
+    }
+    sec.append(ul);
+    box.append(sec);
+    return;
+  }
   box.append(el('p', 'insp-eyebrow', 'Graph'), el('h2', 'insp-title', `${GRAPH_INFO[kind].name} graph`), el('p', 'insp-desc', GRAPH_INFO[kind].caption));
 
   const { settings } = collectSettings(state.graphs);
@@ -887,7 +1020,7 @@ function renderStatus() {
     s.textContent = 'Preview is live. Export when it looks right.';
   }
   const { settings } = collectSettings(state.graphs);
-  $('#status-counts').textContent = `Blocks ${state.graphs.terrain.nodes.length} nodes · Post FX ${state.graphs.post.nodes.length} nodes · ${settings.size} in-game setting${settings.size === 1 ? '' : 's'}`;
+  $('#status-counts').textContent = `Blocks ${state.graphs.terrain.nodes.length} nodes · Post FX ${state.graphs.post.nodes.length} nodes · ${state.textures.length} texture${state.textures.length === 1 ? '' : 's'} · ${settings.size} setting${settings.size === 1 ? '' : 's'}`;
 }
 
 function refreshAll() {
@@ -895,6 +1028,7 @@ function refreshAll() {
   renderInspector();
   scheduleCompile(0);
   $('#graph-caption').textContent = GRAPH_INFO[state.kind].caption;
+  syncTextureView();
 }
 
 // ---------------------------------------------------------------- modals
@@ -1015,7 +1149,7 @@ async function saveFile(filename, blob) {
 }
 
 function graphJSON() {
-  return JSON.stringify({ app: 'BlockGraph', version: 1, packName: state.packName, graphs: state.graphs }, null, 2);
+  return JSON.stringify({ app: 'BlockGraph', version: 2, packName: state.packName, graphs: state.graphs, textures: state.textures, texNext: state.texNext }, null, 2);
 }
 
 function openExport() {
@@ -1067,8 +1201,9 @@ function openExport() {
   const dl = el('button', 'btn primary big', 'Download shader pack (.zip)');
   dl.type = 'button';
   dl.addEventListener('click', async () => {
-    const built = buildIris(state.graphs, { name: state.packName });
-    const zipFiles = { ...built.files, 'blockgraph-graph.json': graphJSON() };
+    const tex = await TX.shaderTextureFiles(state.graphs);
+    const built = buildIris(state.graphs, { name: state.packName, customTextures: tex.list });
+    const zipFiles = { ...built.files, ...tex.files, 'blockgraph-graph.json': graphJSON() };
     await saveFile(`${slug(state.packName)}.zip`, makeZip(zipFiles));
   });
   const js = el('button', 'btn ghost', 'Save graph file (.json)');
@@ -1077,10 +1212,28 @@ function openExport() {
   actions.append(dl, js);
   wrap.append(actions);
 
+  // Resource pack: the textures that replace Minecraft textures.
+  const rpCount = TX.texturesWithTarget().length;
+  const rp = el('section', 'export-rp');
+  rp.append(el('h3', 'export-h', 'Resource pack'));
+  rp.append(el('p', 'modal-lead', rpCount
+    ? `${rpCount} texture${rpCount === 1 ? '' : 's'} from the Textures tab replace Minecraft textures. Put this zip in .minecraft/resourcepacks and turn it on next to the shader pack, so your shader runs on your own textures.`
+    : 'No texture replaces a Minecraft texture yet. In the Textures tab, set “Replaces” on a texture (for example block/stone) to add it here.'));
+  const rpBtn = el('button', 'btn primary', 'Download resource pack (.zip)');
+  rpBtn.type = 'button';
+  rpBtn.disabled = !rpCount;
+  rpBtn.addEventListener('click', async () => {
+    const { files } = await TX.buildResourcePackFiles(state.packName);
+    await saveFile(`${slug(state.packName)}_textures.zip`, makeZip(files));
+  });
+  rp.append(rpBtn);
+  wrap.append(rp);
+
   const steps = el('ol', 'install-steps');
   for (const s of [
     ['Install Iris', 'Fabric Loader for 1.21.11, then the Iris and Sodium mods.'],
-    ['Drop the zip in', '.minecraft/shaderpacks. Leave it zipped.'],
+    ['Drop the zips in', 'Shader pack into .minecraft/shaderpacks, resource pack into .minecraft/resourcepacks. Leave them zipped.'],
+    ['Turn on the textures', 'Options → Resource Packs, move your pack to the right side and press Done.'],
     ['Pick it in game', 'Options → Video Settings → Shader Packs, or press O. Select your pack and press Apply.'],
     ['Tweak and reload', 'Your Slider and On/Off nodes are under Shader Settings. After a new export, replace the zip and press R in game to reload.'],
   ]) {
@@ -1102,6 +1255,7 @@ function openWhy() {
     ['No code to start', 'Each node is one idea, like Mix, Noise or Vignette. You combine ideas instead of memorising syntax.'],
     ['Real packs, not a toy', 'Export writes an actual Iris shader pack for Minecraft 1.21.11 on Fabric. Drop the zip in shaderpacks and it runs.'],
     ['Players get a settings menu', 'Slider and On/Off nodes become options under Iris → Shader Settings, without hand-editing shaders.properties.'],
+    ['Textures and shaders together', 'The Textures tab builds block textures with Blender-style nodes and pixel paint. Export them as a resource pack, see them live under your shader, or feed them to the shader with Image Texture.'],
     ['You learn the real thing', 'View code shows the GLSL your graph makes, with each line tagged by node. It is a gentle way into shader programming.'],
     ['Works like Unity Shader Graph', 'Live previews on every node, a Lit output with Normal, Smoothness and Metallic, Custom Function, Sticky Notes, and Unity\u2019s node families from Math to UV. What you learn here transfers to Unity, Unreal, Blender and Godot.'],
   ];
@@ -1155,8 +1309,9 @@ function applyPreset(p) {
   state.graphs.terrain.needsLayout = true;
   state.graphs.post.needsLayout = true;
   state.presetId = p.id;
-  state.views = { terrain: null, post: null };
-  editor.load(state.graphs[state.kind], null);
+  state.views = { ...state.views, terrain: null, post: null };
+  if (state.kind === 'texture') switchGraph('terrain');
+  editor.load(currentGraph(), null);
   requestAnimationFrame(() => editor.frameAll(true));
   layoutIfNeeded();
   pushHistory();
@@ -1270,8 +1425,13 @@ function bindUI() {
       if (!validGraphs(d.graphs)) throw new Error('not a BlockGraph file');
       state.graphs = d.graphs;
       state.packName = d.packName || state.packName;
+      state.textures = Array.isArray(d.textures) ? d.textures : [];
+      state.texNext = Math.max(d.texNext || 1, state.textures.length + 1);
+      state.texSel = state.textures[0]?.id || null;
       state.views = { terrain: null, post: null };
-      editor.load(state.graphs[state.kind], null);
+      TX.syncRegistry();
+      TX.loadAll();
+      editor.load(currentGraph(), null);
       requestAnimationFrame(() => editor.frameAll(true));
       pushHistory();
       refreshAll();
@@ -1335,6 +1495,14 @@ function bindUI() {
 showPreviews = store.get(PREVIEWS_KEY) !== '0';
 try { collapsedCats = new Set(JSON.parse(store.get(COLLAPSED_KEY) || '[]')); } catch { collapsedCats = new Set(); }
 loadInitial();
+TX.initTextures({
+  state, preview,
+  pushHistory: () => pushHistory(),
+  toast: (m) => toast(m),
+  selectTexture: (id) => selectTexture(id),
+  onTexturesChanged: () => onTexturesChanged(),
+});
+TX.syncRegistry();
 bindUI();
 renderPresetMenu();
 history = [snapshot()];
@@ -1345,3 +1513,4 @@ state.kind = null;
 switchGraph(startKind);
 requestAnimationFrame(() => editor.frameAll(false, $('#welcome').hidden ? 0 : 340));
 compileNow();
+TX.loadAll().then(() => { if (state.kind === 'texture') updateNodePreviews(); });

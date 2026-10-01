@@ -6,7 +6,8 @@ It works like Unity Shader Graph: every node is a small piece of GLSL, and the g
 
 ## What you get
 
-- **Two graphs.** *Blocks* runs on every block (exports to `gbuffers_terrain` and `gbuffers_water`). *Post FX* runs on the finished screen image (exports to `composite`).
+- **Two shader graphs.** *Blocks* runs on every block (exports to `gbuffers_terrain` and `gbuffers_water`). *Post FX* runs on the finished screen image (exports to `composite`).
+- **Textures tab: a resource pack creator.** Build textures with Blender-style nodes (Brick, Wave, Magic, Musgrave, Voronoi, Noise, White Noise, Gradient), pixel-paint on top (pencil, eraser, fill, colour picker), or upload PNGs (for example textures baked in Blender). Pick which Minecraft texture each one replaces, see it in the live preview under your shader, and export a resource pack (format 75, Minecraft 1.21.11). The **Image Texture** node samples any of them inside a shader, and they ship in the shader pack as Iris custom textures.
 - **About 140 nodes, following Unity Shader Graph's library.** Inputs (block texture and LOD, biome tint, light, block type masks, face UV, view direction, screen position, sun and sky, camera, time and weather), Math (basic, advanced, range, round, interpolation, derivatives, random), Trigonometry and waves, Vector and channel (cross, projection, reflection, refract, rotate about axis, sphere mask, swizzle, flip, channel mask), Logic (branch, comparison, and, or, not), Artistic colour (blend with 21 modes, white balance, replace colour, colour mask, channel mixer, invert, colourspace conversion, dither, gradient, blackbody, metal reflectance), Normal (from height, strength, blend), UV (tiling and offset, rotate, twirl, polar, spherize, radial shear), Procedural (noise, gradient noise, Voronoi, checkerboard, ellipse, rectangle, rounded rectangle, polygon) and screen effects.
 - **Live preview on every node**, like Unity: a lit ball for block nodes, the real scene for Post FX nodes.
 - **Lit output.** The Block Output works like Unity's Master Stack: Color, Alpha, Normal, Smoothness, Metallic, Ambient Occlusion, Emission and Alpha Clip, with Vanilla or Lit (sun shading plus specular) lighting.
@@ -44,6 +45,7 @@ The zip also contains `blockgraph-graph.json`. Open it with Presets → Open gra
 | `app/js/targets.js` | Wraps compiled code into WebGL2 preview shaders and Iris pack files |
 | `app/js/preview.js` | WebGL2 renderer, procedural block textures and the preview scene |
 | `app/js/editor.js` | The node canvas: dragging, wiring, panning, zooming, selection |
+| `app/js/textures.js` | Textures tab: baking, pixel paint, uploads, resource pack export |
 | `app/js/app.js` | App shell: library, inspector, presets, undo, export |
 | `app/js/zip.js` | Small ZIP writer for the pack export |
 

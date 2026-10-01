@@ -2,7 +2,7 @@
 // panning, zooming and selection. It edits the graph object it was given and
 // reports every change back to the app.
 
-import { NODE_DEFS, BINDS, rgbToHex, hexToLinear, normStops, swizzleMask } from './nodes.js';
+import { NODE_DEFS, BINDS, rgbToHex, hexToLinear, normStops, swizzleMask, allowedIn } from './nodes.js';
 import { inferTypes, defaultParams } from './codegen.js';
 import { previewableNode, choiceOptions, choiceIndex } from './targets.js';
 
@@ -73,6 +73,7 @@ export class GraphEditor {
     if (!def) return null;
     const node = { id: this.graph.nextId++, type, x: Math.round(x), y: Math.round(y), params: defaultParams(def), defaults: {}, ...extra };
     if (def.setting) node.params.name = this.uniqueSettingName(node.params.name);
+    if (def.texturePicker && !node.params.tex) node.params.tex = this.opts.defaultTexture?.(this.kind) || '';
     this.graph.nodes.push(node);
     return node;
   }
@@ -144,7 +145,7 @@ export class GraphEditor {
     this.selection.clear();
     for (const n of clip.nodes) {
       const def = NODE_DEFS[n.type];
-      if (!def || (def.graphs && !def.graphs.includes(this.kind)) || def.isOutput) continue;
+      if (!def || !allowedIn(def, this.kind)) continue;
       const copy = { ...JSON.parse(JSON.stringify(n)), id: this.graph.nextId++, x: n.x + offset, y: n.y + offset };
       if (def.setting) copy.params.name = this.uniqueSettingName(copy.params.name);
       map.set(n.id, copy.id);
@@ -548,6 +549,23 @@ export class GraphEditor {
         }).join(', ')})`;
         strip.title = 'Edit the stops in the inspector';
         wrap.append(strip);
+      } else if (p.kind === 'texture') {
+        const sel = el('select', 'ctl-select');
+        sel.setAttribute('aria-label', p.name);
+        const none = el('option', null, 'Choose a texture…');
+        none.value = '';
+        sel.append(none);
+        for (const t of this.opts.textureList?.(this.kind) || []) {
+          const opt = el('option', null, t.name);
+          opt.value = t.id;
+          sel.append(opt);
+        }
+        sel.value = P[p.id] || '';
+        sel.addEventListener('change', () => {
+          n.params[p.id] = sel.value;
+          commit(false);
+        });
+        wrap.append(sel);
       } else if (p.kind === 'code') {
         const first = String(P[p.id] || '').split('\n').find((l) => l.trim() && !l.trim().startsWith('//')) || '';
         const code = el('code', 'ctl-code', first || '(empty)');

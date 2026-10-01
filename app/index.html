@@ -24,6 +24,9 @@
       <button class="graph-tab" role="tab" type="button" data-kind="post" id="tab-post">
         <span class="tab-name">Post FX</span><span class="tab-badge" hidden></span>
       </button>
+      <button class="graph-tab" role="tab" type="button" data-kind="texture" id="tab-texture">
+        <span class="tab-name">Textures</span><span class="tab-badge" hidden></span>
+      </button>
     </div>
 
     <div class="top-actions">
@@ -93,6 +96,11 @@
         <button class="btn ghost small" id="welcome-close" type="button">Got it</button>
       </div>
     </div>
+    <div class="image-note" id="image-note" hidden>
+      <p class="welcome-eyebrow">Uploaded image</p>
+      <h2 id="image-note-title">Image</h2>
+      <p>Uploaded images have no node graph. Paint on them in the panel on the right, pick the Minecraft texture they replace, or use them in the Blocks or Post FX graph through an Image Texture node.</p>
+    </div>
     <p class="hint-bar"><span>Drag from a dot to wire</span><span>Right-click or Space to add</span><span>Shift-drag to select</span><span>Del to delete</span></p>
   </main>
 
@@ -116,6 +124,43 @@
         <label class="pv-row" for="pv-time"><span>Time</span><input type="range" id="pv-time" min="0" max="1" step="0.005" value="0.15"><output id="pv-time-out" for="pv-time"></output></label>
         <label class="pv-row" for="pv-rain"><span>Rain</span><input type="range" id="pv-rain" min="0" max="1" step="0.01" value="0"><output id="pv-rain-out" for="pv-rain">0%</output></label>
       </div>
+    </section>
+    <section class="tex-card" id="tex-card" aria-label="Texture" hidden>
+      <div class="tex-head">
+        <h2>Textures</h2>
+        <div class="tex-actions">
+          <div class="menu-wrap">
+            <button class="btn ghost small" id="tex-new" type="button" aria-haspopup="menu" aria-expanded="false">New
+              <svg class="chev" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4"/></svg>
+            </button>
+            <div class="menu" id="menu-tex" role="menu" hidden></div>
+          </div>
+          <button class="btn ghost small" id="tex-upload" type="button">Upload image</button>
+        </div>
+      </div>
+      <div class="tex-list" id="tex-list" role="listbox" aria-label="Textures in your pack"></div>
+      <div class="tex-props" id="tex-props"></div>
+      <div class="paint-bar" role="toolbar" aria-label="Paint tools">
+        <button class="tool on" type="button" data-tool="pencil" title="Pencil (B)" aria-pressed="true">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13l1-3 7-7 2 2-7 7-3 1zM10 4l2 2"/></svg>
+        </button>
+        <button class="tool" type="button" data-tool="eraser" title="Eraser: shows the node result again (E)" aria-pressed="false">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 13h7M3 10l6-6 4 4-5 5H6z"/></svg>
+        </button>
+        <button class="tool" type="button" data-tool="fill" title="Fill (G)" aria-pressed="false">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 8l4-4 5 5-4 4zM13 11c0 1 1 1.5 1 2.5a1 1 0 0 1-2 0c0-1 1-1.5 1-2.5z"/></svg>
+        </button>
+        <button class="tool" type="button" data-tool="picker" title="Pick colour (I)" aria-pressed="false">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3l3 3M4 12l6-6 1 1-6 6H4zM9 4l3 3"/></svg>
+        </button>
+        <input type="color" id="paint-color" value="#d94b3a" aria-label="Paint colour">
+        <button class="btn ghost small" id="paint-clear" type="button">Clear paint</button>
+      </div>
+      <div class="tex-stage">
+        <canvas id="tex-canvas" width="512" height="512" aria-label="Texture. Click and drag to paint pixels."></canvas>
+        <canvas id="tex-tile" width="192" height="192" aria-label="The texture repeated, as it tiles on blocks"></canvas>
+      </div>
+      <p class="field-hint" id="tex-hint"></p>
     </section>
     <section class="inspector" id="inspector" aria-live="polite"></section>
   </aside>
@@ -147,4 +192,5 @@
 
 <div class="toast" id="toast" role="status" hidden></div>
 <input type="file" id="file-input" accept=".json,application/json" hidden>
+<input type="file" id="image-input" accept="image/png,image/jpeg,image/webp" hidden>
 <script type="module" src="js/app.js"></script>

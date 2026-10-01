@@ -2,7 +2,7 @@
 // turns its graph into HLSL. One pass per stage: the vertex stage only follows
 // the wires that reach "Vertex Offset", the fragment stage follows the rest.
 
-import { NODE_DEFS, TYPE_RANK, BINDS } from './nodes.js';
+import { NODE_DEFS, TYPE_RANK, BINDS, allowedIn } from './nodes.js';
 
 export const GLSL_TYPES = ['float', 'vec2', 'vec3', 'vec4'];
 
@@ -179,7 +179,7 @@ export function compileStage(graph, kind, stage, opts = {}) {
     }
     visiting.add(id);
     used.add(id);
-    if (def.graphs && !def.graphs.includes(kind)) {
+    if (!def.isOutput && !allowedIn(def, kind)) {
       errors.push({ node: id, msg: `${def.title} can't be used in this graph.` });
     }
     if (def.fragOnly && stage === 'vertex') {

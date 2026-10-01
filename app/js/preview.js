@@ -73,6 +73,36 @@ function rng(seed) {
 
 const TILE = { grassTop: 0, grassSide: 1, dirt: 2, stone: 3, logSide: 4, logTop: 5, leaves: 6, shortGrass: 7, poppy: 8, water: 9, sand: 10, glowstone: 11, diamond: 12 };
 const ATLAS_TILES = 4;
+const TILE_PX = 64;
+
+// Which preview tile a resource-pack texture path replaces.
+export const TARGET_TILES = {
+  'block/grass_block_top': TILE.grassTop,
+  'block/grass_block_side': TILE.grassSide,
+  'block/dirt': TILE.dirt,
+  'block/stone': TILE.stone,
+  'block/oak_log': TILE.logSide,
+  'block/oak_log_top': TILE.logTop,
+  'block/oak_leaves': TILE.leaves,
+  'block/short_grass': TILE.shortGrass,
+  'block/poppy': TILE.poppy,
+  'block/water_still': TILE.water,
+  'block/sand': TILE.sand,
+  'block/glowstone': TILE.glowstone,
+  'block/diamond_ore': TILE.diamond,
+};
+
+// Accepts ImageData, an image or a canvas and returns something drawable.
+function toCanvas(img) {
+  if (img instanceof ImageData) {
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    c.getContext('2d').putImageData(img, 0, 0);
+    return c;
+  }
+  return img;
+}
 
 function hex(h) {
   const n = parseInt(h.slice(1), 16);
@@ -385,7 +415,8 @@ function link(gl, vsSrc, fsSrc, attribs) {
     const info = gl.getActiveUniform(p, i);
     uniforms[info.name] = gl.getUniformLocation(p, info.name);
   }
-  return { p, u: uniforms };
+  const texUniforms = Object.keys(uniforms).filter((n) => n.startsWith('bg_tex_'));
+  return { p, u: uniforms, tex: texUniforms };
 }
 
 const ATTRIBS = ['a_pos', 'a_normal', 'a_uv', 'a_color', 'a_lm', 'a_block', 'a_top'];
@@ -436,10 +467,20 @@ export class Preview {
 
   init() {
     const gl = this.gl;
+    // The procedural 16px tiles are kept so a custom texture can be removed again.
     const atlas = buildAtlas();
+    this.baseAtlas = document.createElement('canvas');
+    this.baseAtlas.width = this.baseAtlas.height = atlas.size;
+    this.baseAtlas.getContext('2d').putImageData(new ImageData(atlas.data, atlas.size, atlas.size), 0, 0);
+    this.atlasCanvas = document.createElement('canvas');
+    this.atlasCanvas.width = this.atlasCanvas.height = TILE_PX * ATLAS_TILES;
+    const actx = this.atlasCanvas.getContext('2d');
+    actx.imageSmoothingEnabled = false;
+    actx.drawImage(this.baseAtlas, 0, 0, this.atlasCanvas.width, this.atlasCanvas.height);
     this.atlas = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, this.atlas);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, atlas.size, atlas.size, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array(atlas.data.buffer));
+    gl.pixelStorei(gl.UNPACK_COLORSPACE_CONVERSION_WEBGL, gl.NONE);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.atlasCanvas);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
@@ -686,7 +727,7 @@ export class Preview {
   // Every node gets its own thumbnail, like Unity Shader Graph. All of them are
   // drawn into one offscreen grid, read back once, and handed to the editor.
 
-  setNodePreviews(items, tile) {
+  setNodePreviews(items, tile, texSize = 16) {
     if (!this.ok) return;
     const gl = this.gl;
     this.npCache = this.npCache || new Map();
@@ -711,7 +752,7 @@ export class Preview {
         this.npCache.delete(src);
       }
     }
-    this.np = list.length ? { items: list, tile, dirty: true, last: 0, animated: list.some((x) => x.animated) } : null;
+    this.np = list.length ? { items: list, tile, texSize, dirty: true, last: 0, animated: list.some((x) => x.animated) } : null;
   }
 
   invalidateNodePreviews() {
@@ -761,6 +802,7 @@ export class Preview {
       if (u.u_tileOrigin) gl.uniform2fv(u.u_tileOrigin, tile.origin);
       if (u.u_tileSize) gl.uniform1f(u.u_tileSize, tile.size);
       if (u.u_tileRes) gl.uniform2f(u.u_tileRes, W, H);
+      if (u.u_texSize) gl.uniform2f(u.u_texSize, this.np.texSize || 16, this.np.texSize || 16);
       this.setCommon(u, f);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     });
@@ -788,9 +830,139 @@ export class Preview {
     this.onNodePreviews(out);
   }
 
-  // Uniforms every generated shader can read (the bg_* builtins).
-  setCommon(u, f) {
+
+  defaultFrame() {
+    return { eye: [8, 6, 8], fwd: [-0.6, -0.4, -0.6], env: this.environment(), time: (performance.now() - this.start) / 1000, projInv: new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]) };
+  }
+
+  // ------------------------------------------------- custom textures & tiles
+
+  // Swaps one preview tile for a texture from the Textures tab (or puts the
+  // built-in one back when img is null).
+  setTileOverride(tile, img) {
+    if (!this.ok || tile == null) return;
+    const ctx = this.atlasCanvas.getContext('2d');
+    const x = (tile % ATLAS_TILES) * TILE_PX, y = Math.floor(tile / ATLAS_TILES) * TILE_PX;
+    ctx.clearRect(x, y, TILE_PX, TILE_PX);
+    if (img) {
+      const src = toCanvas(img);
+      ctx.imageSmoothingEnabled = src.width > TILE_PX;
+      ctx.drawImage(src, x, y, TILE_PX, TILE_PX);
+    } else {
+      ctx.imageSmoothingEnabled = false;
+      const s = 16;
+      ctx.drawImage(this.baseAtlas, (tile % ATLAS_TILES) * s, Math.floor(tile / ATLAS_TILES) * s, s, s, x, y, TILE_PX, TILE_PX);
+    }
     const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.atlas);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, this.atlasCanvas);
+    this.invalidateNodePreviews();
+  }
+
+  // Textures that Image Texture nodes sample (bg_tex_<id>).
+  setCustomTexture(id, img, { blur = true } = {}) {
+    if (!this.ok) return;
+    const gl = this.gl;
+    this.customTex = this.customTex || new Map();
+    let t = this.customTex.get(id);
+    if (!t) {
+      t = gl.createTexture();
+      this.customTex.set(id, t);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, toCanvas(img));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, blur ? gl.LINEAR : gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, blur ? gl.LINEAR : gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    this.invalidateNodePreviews();
+  }
+
+  removeCustomTexture(id) {
+    const t = this.customTex?.get(id);
+    if (t) {
+      this.gl.deleteTexture(t);
+      this.customTex.delete(id);
+    }
+  }
+
+  bindCustomTextures(u) {
+    const names = Object.keys(u).filter((n) => n.startsWith('bg_tex_'));
+    if (!names.length) return;
+    const gl = this.gl;
+    if (!this.missingTex) {
+      this.missingTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.missingTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([255, 0, 255, 255]));
+    }
+    names.forEach((name, i) => {
+      const unit = 4 + i;
+      gl.activeTexture(gl.TEXTURE0 + unit);
+      gl.bindTexture(gl.TEXTURE_2D, this.customTex?.get(name.slice(7)) || this.missingTex);
+      gl.uniform1i(u[name], unit);
+    });
+    gl.activeTexture(gl.TEXTURE0);
+  }
+
+  // Renders a texture graph into pixels (see buildTextureShader).
+  bakeTexture(src, size, seamless) {
+    if (!this.ok) return { error: this.error };
+    const gl = this.gl;
+    this.bakeCache = this.bakeCache || new Map();
+    let entry = this.bakeCache.get(src);
+    if (!entry) {
+      try {
+        entry = { prog: link(gl, FULLSCREEN_VS, src) };
+      } catch (e) {
+        entry = { error: String(e.message || e) };
+      }
+      if (this.bakeCache.size > 40) {
+        for (const [k, v] of this.bakeCache) {
+          if (v.prog) gl.deleteProgram(v.prog.p);
+          this.bakeCache.delete(k);
+          break;
+        }
+      }
+      this.bakeCache.set(src, entry);
+    }
+    if (entry.error) return { error: entry.error };
+    size = Math.max(1, Math.min(512, size | 0));
+    if (!this.bakeFbo) {
+      this.bakeFbo = gl.createFramebuffer();
+      this.bakeTex = gl.createTexture();
+    }
+    if (this.bakeSize !== size) {
+      gl.bindTexture(gl.TEXTURE_2D, this.bakeTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.bakeFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.bakeTex, 0);
+      this.bakeSize = size;
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.bakeFbo);
+    gl.viewport(0, 0, size, size);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.useProgram(entry.prog.p);
+    const u = entry.prog.u;
+    if (u.u_texSize) gl.uniform2f(u.u_texSize, size, size);
+    if (u.u_seamless) gl.uniform1f(u.u_seamless, seamless ? 1 : 0);
+    this.bindCustomTextures(u);
+    gl.bindVertexArray(this.emptyVao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    const buf = new Uint8Array(size * size * 4);
+    gl.readPixels(0, 0, size, size, gl.RGBA, gl.UNSIGNED_BYTE, buf);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    const img = new ImageData(size, size);
+    for (let y = 0; y < size; y++) img.data.set(buf.subarray((size - 1 - y) * size * 4, (size - y) * size * 4), y * size * 4);
+    return { img };
+  }
+
+  // Uniforms every generated shader can read (the bg_* builtins).
+  setCommon(u, f = this.lastFrame || this.defaultFrame()) {
+    const gl = this.gl;
+    this.bindCustomTextures(u);
     if (u.u_cam) gl.uniform3fv(u.u_cam, f.eye);
     if (u.u_camFwd) gl.uniform3fv(u.u_camFwd, f.fwd);
     if (u.u_sunDir) gl.uniform3fv(u.u_sunDir, f.env.sun);

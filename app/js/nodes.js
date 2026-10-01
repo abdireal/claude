@@ -1548,6 +1548,194 @@ shape('polygon', 'Polygon', 'A regular polygon: 3 sides for a triangle, 6 for a 
   out: { out: `clamp((1.0 - ${V}d) / max(fwidth(${V}d), 1e-5), 0.0, 1.0)` },
 }), 'hexagon triangle star shape');
 
+// ---------------------------------------------------- Blender texture nodes
+// Blender's procedural textures (Brick, Wave, Magic, Musgrave, White Noise).
+// They work in every graph, and are the main tools of the Textures tab.
+
+def({
+  type: 'brick', title: 'Brick Texture', cat: 'Pattern', width: 200,
+  desc: 'Rows of bricks with mortar between them, like Blender’s Brick Texture. Each brick gets a random mix of Color 1 and Color 2.',
+  keywords: 'bricks wall tiles mortar blender',
+  inputs: [
+    { id: 'uv', name: 'Vector', type: 'vec2', bind: 'faceuv' },
+    { id: 's', name: 'Scale', type: 'float', def: 1 },
+    { id: 'm', name: 'Mortar Size', type: 'float', def: 0.06 },
+    { id: 'bw', name: 'Brick Width', type: 'float', def: 0.5 },
+    { id: 'rh', name: 'Row Height', type: 'float', def: 0.25 },
+    { id: 'off', name: 'Offset', type: 'float', def: 0.5 },
+    { id: 'c1', name: 'Color 1', type: 'vec3', def: [0.62, 0.3, 0.22], color: true },
+    { id: 'c2', name: 'Color 2', type: 'vec3', def: [0.5, 0.22, 0.16], color: true },
+    { id: 'mc', name: 'Mortar', type: 'vec3', def: [0.72, 0.69, 0.63], color: true },
+  ],
+  outputs: [
+    { id: 'rgb', name: 'Color', type: 'vec3' },
+    { id: 'fac', name: 'Fac (mortar)', type: 'float' },
+  ],
+  gen: ({ I, V }) => ({
+    pre: [
+      `vec2 ${V}p = ${I.uv} * ${I.s}; float ${V}bw = max(${I.bw}, 1e-3); float ${V}rh = max(${I.rh}, 1e-3);`,
+      `float ${V}row = floor(${V}p.y / ${V}rh); float ${V}x = ${V}p.x / ${V}bw + ${I.off} * mod(${V}row, 2.0);`,
+      `vec2 ${V}cell = vec2(floor(${V}x), ${V}row); vec2 ${V}lu = vec2(fract(${V}x), fract(${V}p.y / ${V}rh));`,
+      `float ${V}edge = min(min(${V}lu.x, 1.0 - ${V}lu.x) * ${V}bw, min(${V}lu.y, 1.0 - ${V}lu.y) * ${V}rh);`,
+      `float ${V}mort = 1.0 - step(${I.m} * 0.5, ${V}edge);`,
+    ].join('\n'),
+    out: {
+      rgb: `mix(mix(${I.c1}, ${I.c2}, bg_hash12(${V}cell + 17.0)), ${I.mc}, ${V}mort)`,
+      fac: `${V}mort`,
+    },
+  }),
+});
+
+def({
+  type: 'waveTexture', title: 'Wave Texture', cat: 'Pattern', width: 200,
+  desc: 'Stripes (Bands) or circles (Rings), optionally warped by noise. Like Blender’s Wave Texture, good for wood, marble and sand ripples.',
+  keywords: 'stripes bands rings wood marble blender wave',
+  params: [
+    { id: 'kind', name: 'Type', kind: 'select', def: 'bands', options: ['bands', 'rings'] },
+    { id: 'dir', name: 'Direction', kind: 'select', def: 'diagonal', options: ['x', 'y', 'z', 'diagonal'] },
+    { id: 'profile', name: 'Profile', kind: 'select', def: 'sine', options: ['sine', 'saw', 'triangle'] },
+  ],
+  inputs: [
+    { id: 'p', name: 'Vector', type: 'vec3', bind: 'pos' },
+    { id: 's', name: 'Scale', type: 'float', def: 1 },
+    { id: 'd', name: 'Distortion', type: 'float', def: 2 },
+    { id: 'ds', name: 'Detail Scale', type: 'float', def: 1 },
+  ],
+  outputs: [
+    { id: 'rgb', name: 'Color', type: 'vec3' },
+    { id: 'fac', name: 'Fac', type: 'float' },
+  ],
+  gen: ({ I, P, V }) => {
+    const p = `${V}p`;
+    const bands = { x: `${p}.x * 20.0`, y: `${p}.y * 20.0`, z: `${p}.z * 20.0`, diagonal: `(${p}.x + ${p}.y + ${p}.z) * 10.0` };
+    const rings = { x: `length(${p}.yz) * 20.0`, y: `length(${p}.xz) * 20.0`, z: `length(${p}.xy) * 20.0`, diagonal: `length(${p}) * 20.0` };
+    const n = (P.kind === 'rings' ? rings : bands)[P.dir] || bands.diagonal;
+    const prof = {
+      sine: `(0.5 + 0.5 * sin(${V}n - 1.5707963))`,
+      saw: `fract(${V}n * 0.15915494)`,
+      triangle: `(abs(fract(${V}n * 0.15915494 + 0.5) - 0.5) * 2.0)`,
+    }[P.profile] || `(0.5 + 0.5 * sin(${V}n - 1.5707963))`;
+    return {
+      pre: `vec3 ${p} = (${I.p} + 1e-6) * ${I.s}; float ${V}n = ${n} + ${I.d} * (bg_fbm3(${p} * ${I.ds}, 3) * 2.0 - 1.0); float ${V}f = ${prof};`,
+      out: { rgb: `vec3(${V}f)`, fac: `${V}f` },
+    };
+  },
+});
+
+def({
+  type: 'magic', title: 'Magic Texture', cat: 'Pattern', width: 190,
+  desc: 'Blender’s psychedelic swirl texture. More depth adds more swirls. Try it through Blackbody or a Gradient for lava and magic effects.',
+  keywords: 'psychedelic swirl trippy magic lava blender',
+  params: [{ id: 'depth', name: 'Depth', kind: 'select', def: '2', options: ['1', '2', '3', '4', '5', '6'] }],
+  inputs: [
+    { id: 'p', name: 'Vector', type: 'vec3', bind: 'pos' },
+    { id: 's', name: 'Scale', type: 'float', def: 1 },
+    { id: 'd', name: 'Distortion', type: 'float', def: 1 },
+  ],
+  outputs: [
+    { id: 'rgb', name: 'Color', type: 'vec3' },
+    { id: 'fac', name: 'Fac', type: 'float' },
+  ],
+  gen: ({ I, P, V }) => {
+    const n = Math.max(1, Math.min(6, parseInt(P.depth, 10) || 2));
+    const x = `${V}x`, y = `${V}y`, z = `${V}z`, d = `${V}d`;
+    const steps = [
+      `${x} *= ${d}; ${y} *= ${d}; ${z} *= ${d}; ${y} = -cos(${x} - ${y} + ${z}); ${y} *= ${d};`,
+      `${x} = cos(${x} - ${y} - ${z}); ${x} *= ${d};`,
+      `${z} = sin(-${x} - ${y} - ${z}); ${z} *= ${d};`,
+      `${x} = -cos(-${x} + ${y} - ${z}); ${x} *= ${d};`,
+      `${y} = -sin(-${x} + ${y} + ${z}); ${y} *= ${d};`,
+      `${y} = -cos(-${x} + ${y} + ${z}); ${y} *= ${d};`,
+    ];
+    return {
+      pre: [
+        `vec3 ${V}p = ${I.p} * ${I.s} * 5.0; float ${d} = ${I.d};`,
+        `float ${x} = sin((${V}p.x + ${V}p.y + ${V}p.z) * 5.0);`,
+        `float ${y} = cos((-${V}p.x + ${V}p.y - ${V}p.z) * 5.0);`,
+        `float ${z} = -cos((-${V}p.x - ${V}p.y + ${V}p.z) * 5.0);`,
+        ...steps.slice(0, n),
+        `if (abs(${d}) > 1e-5) { ${x} /= 2.0 * ${d}; ${y} /= 2.0 * ${d}; ${z} /= 2.0 * ${d}; }`,
+        `vec3 ${V}c = clamp(vec3(0.5 - ${x}, 0.5 - ${y}, 0.5 - ${z}), 0.0, 1.0);`,
+      ].join('\n'),
+      out: { rgb: `${V}c`, fac: `((${V}c.x + ${V}c.y + ${V}c.z) / 3.0)` },
+    };
+  },
+});
+
+def({
+  type: 'musgrave', title: 'Musgrave Texture', cat: 'Pattern', width: 200,
+  desc: 'Layered fractal noise (fBm) with Blender’s controls. Detail adds layers, Dimension sets how rough they are, Lacunarity how fast they shrink.',
+  keywords: 'fbm fractal noise rock terrain blender musgrave',
+  inputs: [
+    { id: 'p', name: 'Vector', type: 'vec3', bind: 'pos' },
+    { id: 's', name: 'Scale', type: 'float', def: 1 },
+    { id: 'det', name: 'Detail', type: 'float', def: 4 },
+    { id: 'dim', name: 'Dimension', type: 'float', def: 1 },
+    { id: 'lac', name: 'Lacunarity', type: 'float', def: 2 },
+  ],
+  outputs: [{ id: 'fac', name: 'Fac', type: 'float' }],
+  gen: ({ I }) => `bg_musgrave(${I.p} * ${I.s}, ${I.det}, ${I.dim}, ${I.lac})`,
+});
+
+def({
+  type: 'whiteNoise', title: 'White Noise', cat: 'Pattern', width: 180,
+  desc: 'A random value and colour for every input position, like TV static. In the Textures tab every pixel gets its own value.',
+  keywords: 'random static hash pixel noise blender',
+  inputs: [{ id: 'p', name: 'Vector', type: 'vec3', bind: 'pos' }],
+  outputs: [
+    { id: 'v', name: 'Value', type: 'float' },
+    { id: 'rgb', name: 'Color', type: 'vec3' },
+  ],
+  gen: ({ I, V }) => ({ pre: `vec3 ${V}p = ${I.p} * 7.13;`, out: { v: `bg_hash13(${V}p)`, rgb: `bg_hash33(${V}p)` } }),
+});
+
+// ----------------------------------------------------------- Image texture
+
+// The app keeps this list in sync with the textures in the Textures tab, so
+// Image Texture nodes can tell whether the texture they point at exists.
+export const TEXTURE_REGISTRY = { list: [] };
+export const texSampler = (id) => `bg_tex_${String(id).replace(/[^A-Za-z0-9_]/g, '')}`;
+
+def({
+  type: 'imageTexture', title: 'Image Texture', cat: 'Input', width: 200, texturePicker: true,
+  desc: 'Samples a texture from the Textures tab: one you built with nodes, or a PNG you uploaded (from Blender, for example). It ships inside your shader pack.',
+  keywords: 'image texture png upload sample texture2d blender bake custom',
+  params: [{ id: 'tex', name: 'Texture', kind: 'texture', def: '' }],
+  inputs: [{ id: 'uv', name: 'UV', type: 'vec2', bind: 'faceuv' }],
+  outputs: [
+    { id: 'rgb', name: 'RGB', type: 'vec3' },
+    { id: 'a', name: 'Alpha', type: 'float' },
+    { id: 'rgba', name: 'RGBA', type: 'vec4' },
+  ],
+  gen: ({ I, P, V, stage, kind }) => {
+    const tex = TEXTURE_REGISTRY.list.find((t) => t.id === P.tex);
+    if (!tex || (kind === 'texture' && tex.kind !== 'image')) {
+      return { pre: `vec4 ${V}c = vec4(1.0, 0.0, 1.0, 1.0);`, out: { rgb: `${V}c.rgb`, a: `${V}c.a`, rgba: `${V}c` } };
+    }
+    const s = texSampler(tex.id);
+    const sample = stage === 'vertex' ? `textureLod(${s}, ${I.uv}, 0.0)` : `texture(${s}, ${I.uv})`;
+    return {
+      fn: { key: s, code: `uniform sampler2D ${s};` },
+      pre: `vec4 ${V}c = ${sample};`,
+      out: { rgb: `${V}c.rgb`, a: `${V}c.a`, rgba: `${V}c` },
+    };
+  },
+});
+
+// ------------------------------------------------------ Texture graph only
+
+def({
+  type: 'texCoord', title: 'Texture Coordinate', cat: 'Input', graphs: ['texture'],
+  desc: 'Where this pixel sits in the texture you are making: UV runs 0–1, Pixel counts whole pixels (0–15 for a 16×16 texture).',
+  keywords: 'uv pixel coordinate texture generated',
+  outputs: [
+    { id: 'uv', name: 'UV', type: 'vec2' },
+    { id: 'px', name: 'Pixel', type: 'vec2' },
+    { id: 'size', name: 'Size', type: 'vec2' },
+  ],
+  gen: () => ({ out: { uv: 'bg_uv', px: 'floor(bg_pixel)', size: 'bg_texSize' } }),
+});
+
 // ----------------------------------------------------------------- Utility
 
 def({
@@ -1623,6 +1811,27 @@ def({
   gen: () => ({ out: {} }),
 });
 
+def({
+  type: 'textureOutput', title: 'Texture Output', cat: 'Output', graphs: ['texture'], isOutput: true, width: 190,
+  desc: 'The finished texture. Its pixels go into your resource pack, and into your shader through Image Texture.',
+  inputs: [
+    { id: 'color', name: 'Color', type: 'vec3', def: [0.5, 0.5, 0.5] },
+    { id: 'alpha', name: 'Alpha', type: 'float', def: 1 },
+  ],
+  gen: () => ({ out: {} }),
+});
+
+// Nodes that read the live world (time, weather, camera) or make in-game
+// settings make no sense inside a baked texture.
+for (const t of ['time', 'world', 'sunSky', 'camera', 'wave', 'slider', 'toggle', 'choice']) NODE_DEFS[t].noTexture = true;
+
+// Can this node be used in a graph of this kind ('terrain', 'post' or 'texture')?
+export function allowedIn(def, kind) {
+  if (!def || def.isOutput) return false;
+  if (def.graphs) return def.graphs.includes(kind);
+  return kind !== 'texture' || !def.noTexture;
+}
+
 // --------------------------------------------------------------------- Helpers
 
 // Colour pickers work in sRGB; shaders work in linear-ish values. Minecraft's
@@ -1649,6 +1858,12 @@ export const BINDS = {
     albedo: { expr: '(bg_sampleBlock(bg_uv).rgb * bg_vcolor.rgb)', type: 'vec3', label: 'Texture × Tint', fragOnly: true },
     alpha: { expr: '(bg_sampleBlock(bg_uv).a * bg_vcolor.a)', type: 'float', label: 'Texture Alpha', fragOnly: true },
     light: { expr: 'bg_light', type: 'vec3', label: 'Vanilla Light' },
+  },
+  texture: {
+    uv: { expr: 'bg_uv', type: 'vec2', label: 'Texture UV' },
+    faceuv: { expr: 'bg_uv', type: 'vec2', label: 'Texture UV' },
+    pos: { expr: 'vec3(bg_uv * 4.0, 0.0)', type: 'vec3', label: 'UV × 4' },
+    normal: { expr: 'vec3(0.0, 0.0, 1.0)', type: 'vec3', label: 'Flat' },
   },
   post: {
     uv: { expr: 'bg_screenUV', type: 'vec2', label: 'Screen UV' },
@@ -1792,6 +2007,21 @@ vec3 bg_rotateAxis(vec3 v, vec3 axis, float a) {
   float s = sin(a);
   float k = cos(a);
   return v * k + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - k);
+}
+float bg_musgrave(vec3 p, float detail, float dim, float lac) {
+  float value = 0.0;
+  float pwr = 1.0;
+  float pwHL = pow(max(lac, 1.01), -dim);
+  float oct = clamp(detail, 1.0, 8.0);
+  for (int i = 0; i < 8; i++) {
+    if (float(i) >= floor(oct)) break;
+    value += (bg_gradNoise3(p) * 2.0 - 1.0) * pwr;
+    pwr *= pwHL;
+    p *= lac;
+  }
+  float rmd = oct - floor(oct);
+  value += rmd * (bg_gradNoise3(p) * 2.0 - 1.0) * pwr;
+  return clamp(value * 0.6 + 0.5, 0.0, 1.0);
 }
 vec2 bg_faceUVOf(vec3 p, vec3 n) {
   vec3 a = abs(n);

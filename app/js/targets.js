@@ -4,7 +4,7 @@
 // It also builds the tiny shaders behind each node's own preview thumbnail.
 
 import { compileStage, collectSettings } from './codegen.js';
-import { GLSL_HELPERS, GLSL_FRAG_HELPERS, NODE_DEFS } from './nodes.js';
+import { GLSL_HELPERS, GLSL_FRAG_HELPERS, NODE_DEFS, texSampler } from './nodes.js';
 
 export const BLOCK_IDS = { leaves: 10001, plants: 10002, water: 10003 };
 
@@ -357,6 +357,7 @@ uniform mat4 u_projInv;
 uniform vec2 u_tileOrigin;
 uniform float u_tileSize;
 uniform vec2 u_tileRes;
+uniform vec2 u_texSize;
 ${PREVIEW_COMMON_UNIFORMS}
 ${previewSettingUniforms(settings)}
 in vec2 v_uv;
@@ -408,6 +409,24 @@ ${indent([body], '  ')}
   fragColor = vec4(c, 1.0);
 }
 `;
+  } else if (kind === 'texture') {
+    main = `void main() {
+  vec2 q = vec2(v_uv.x, 1.0 - v_uv.y);
+  float aspect = u_tileRes.x / u_tileRes.y;
+  vec2 sq = vec2((q.x - 0.5) * aspect + 0.5, q.y);
+  if (sq.x < 0.0 || sq.x > 1.0) {
+    vec2 ck = floor(gl_FragCoord.xy / 8.0);
+    fragColor = vec4(vec3(mix(0.11, 0.15, mod(ck.x + ck.y, 2.0))), 1.0);
+    return;
+  }
+  vec2 bg_texSize = max(u_texSize, vec2(1.0));
+  vec2 bg_pixel = (floor(sq * bg_texSize) + 0.5);
+  vec2 bg_uv = bg_pixel / bg_texSize;
+  float bg_time = 0.0;
+${indent([body], '  ')}
+  fragColor = vec4(clamp(${viz}, 0.0, 1.0), 1.0);
+}
+`;
   } else {
     main = `void main() {
   vec2 bg_screenUV = v_uv;
@@ -420,6 +439,45 @@ ${indent([body], '  ')}
   const src = head + main;
   const animated = /bg_time|bg_custom_/.test(body);
   return { src, animated, errors: r.errors };
+}
+
+// ------------------------------------------------------------ texture bake
+
+// Turns a texture graph into a shader that paints the texture one pixel at a
+// time. bg_uv runs 0–1 with v = 0 at the top row, like Minecraft textures.
+// Seamless mode blends in a half-shifted copy near the edges so it tiles.
+export function buildTextureShader(graph) {
+  const r = compileStage(graph, 'texture', 'fragment');
+  const o = r.outputs;
+  const src = `#version 300 es
+precision highp float;
+precision highp int;
+uniform vec2 u_texSize;
+uniform float u_seamless;
+out vec4 fragColor;
+${GLSL_HELPERS}
+${GLSL_FRAG_HELPERS}
+${r.functions.join('\n')}
+vec4 bg_texEval(vec2 bg_uv) {
+  vec2 bg_texSize = u_texSize;
+  vec2 bg_pixel = bg_uv * u_texSize;
+  float bg_time = 0.0;
+${indent(r.lines.length ? r.lines : ['// (no nodes)'], '  ')}
+  return vec4(${o.color || 'vec3(0.5)'}, ${o.alpha || '1.0'});
+}
+void main() {
+  vec2 p = floor(gl_FragCoord.xy) + 0.5;
+  vec2 uv = vec2(p.x, u_texSize.y - p.y) / u_texSize;
+  vec4 c = bg_texEval(uv);
+  if (u_seamless > 0.5) {
+    vec4 c2 = bg_texEval(fract(uv + 0.5));
+    vec2 e = abs(uv - 0.5) * 2.0;
+    c = mix(c, c2, smoothstep(0.55, 1.0, max(e.x, e.y)));
+  }
+  fragColor = clamp(c, 0.0, 1.0);
+}
+`;
+  return { src, errors: r.errors };
 }
 
 // --------------------------------------------------------------------- iris
@@ -771,6 +829,10 @@ export function buildIris(graphs, opts = {}) {
     '# Keep vanilla per-face shading so blocks read as 3D.',
     'oldLighting = true',
   ];
+  if (opts.customTextures?.length) {
+    props.push('', '# Textures from the Textures tab, used by Image Texture nodes.');
+    for (const t of opts.customTextures) props.push(`customTexture.${texSampler(t.id)} = textures/${texSampler(t.id)}.png`);
+  }
   if (names.length) {
     props.push('', '# Settings menu (Iris → Shader Settings). Built from your Slider, On/Off and Dropdown nodes.');
     props.push(`screen = ${names.join(' ')}`);

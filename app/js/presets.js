@@ -372,3 +372,155 @@ export const PRESETS = [
     },
   },
 ];
+
+// -----------------------------------------------------------------------------
+// Texture presets for the Textures tab. Each builds a texture graph; `target`
+// is the Minecraft texture it replaces in the resource pack ('' = shader only).
+
+function texGraph() {
+  const g = graph();
+  const out = add(g, 'textureOutput', 820, 80);
+  return { g, out };
+}
+
+function stoneBase(g, x = 40, y = 40, colors = ['#5c5c5c', '#7b7b7b', '#9c9c9c']) {
+  const mus = add(g, 'musgrave', x, y, {}, { s: 1.4, det: 4, dim: 1, lac: 2.1 });
+  const white = add(g, 'whiteNoise', x, y + 250);
+  const mix = add(g, 'lerp', x + 250, y + 60, {}, { t: 0.3 });
+  const ramp = add(g, 'gradient', x + 480, y + 40, { stops: [{ c: colors[0], t: 0 }, { c: colors[1], t: 0.5 }, { c: colors[2], t: 1 }] });
+  wire(g, mus, 'fac', mix, 'a');
+  wire(g, white, 'v', mix, 'b');
+  wire(g, mix, 'out', ramp, 't');
+  return ramp;
+}
+
+export const TEXTURE_PRESETS = [
+  {
+    id: 'stone', name: 'Stone', target: 'block/stone', size: 16,
+    blurb: 'Rough grey rock from Musgrave noise and white noise through a colour ramp.',
+    build() {
+      const { g, out } = texGraph();
+      const ramp = stoneBase(g);
+      wire(g, ramp, 'rgb', out, 'color');
+      return g;
+    },
+  },
+  {
+    id: 'bricks', name: 'Bricks', target: 'block/bricks', size: 16,
+    blurb: 'Blender-style Brick Texture with a little pixel noise on each brick.',
+    build() {
+      const { g, out } = texGraph();
+      const brick = add(g, 'brick', 40, 40);
+      const white = add(g, 'whiteNoise', 40, 420);
+      const vary = add(g, 'remap', 300, 400, {}, { c: 0.85, d: 1.08 });
+      const mul = add(g, 'multiply', 560, 100);
+      wire(g, white, 'v', vary, 'x');
+      wire(g, brick, 'rgb', mul, 'a');
+      wire(g, vary, 'out', mul, 'b');
+      wire(g, mul, 'out', out, 'color');
+      return g;
+    },
+  },
+  {
+    id: 'planks', name: 'Oak Planks', target: 'block/oak_planks', size: 16,
+    blurb: 'Long boards from Brick Texture, with wood grain from a stretched Wave Texture.',
+    build() {
+      const { g, out } = texGraph();
+      const boards = add(g, 'brick', 40, 40, {}, { bw: 1, rh: 0.25, m: 0.05, c1: [0.64, 0.51, 0.31], c2: [0.56, 0.44, 0.25], mc: [0.42, 0.32, 0.19] });
+      const grain = add(g, 'waveTexture', 40, 460, { kind: 'bands', dir: 'x', profile: 'sine' }, { s: 0.6, d: 3, ds: 0.8 });
+      const shade = add(g, 'remap', 300, 460, {}, { c: 0.82, d: 1.06 });
+      const mul = add(g, 'multiply', 560, 100);
+      wire(g, grain, 'fac', shade, 'x');
+      wire(g, boards, 'rgb', mul, 'a');
+      wire(g, shade, 'out', mul, 'b');
+      wire(g, mul, 'out', out, 'color');
+      return g;
+    },
+  },
+  {
+    id: 'diamond', name: 'Diamond Ore', target: 'block/diamond_ore', size: 16,
+    blurb: 'Stone with cyan gems wherever Voronoi cells are close to their centre.',
+    build() {
+      const { g, out } = texGraph();
+      const ramp = stoneBase(g);
+      const vor = add(g, 'voronoi', 40, 560, {}, { s: 0.9, j: 0.9 });
+      const spot = add(g, 'step', 300, 560, {}, { e: 0.28 });
+      const gem = add(g, 'oneMinus', 520, 560);
+      const gemCol = add(g, 'gradient', 520, 700, { stops: [{ c: '#0f6e78', t: 0 }, { c: '#3fe0ea', t: 0.6 }, { c: '#c8fbff', t: 1 }] });
+      const mix = add(g, 'lerp', 820, 360);
+      wire(g, vor, 'd', spot, 'x');
+      wire(g, spot, 'out', gem, 'x');
+      wire(g, vor, 'cells', gemCol, 't');
+      wire(g, ramp, 'rgb', mix, 'a');
+      wire(g, gemCol, 'rgb', mix, 'b');
+      wire(g, gem, 'out', mix, 't');
+      out.x = 1080;
+      wire(g, mix, 'out', out, 'color');
+      return g;
+    },
+  },
+  {
+    id: 'grassTop', name: 'Grass Top', target: 'block/grass_block_top', size: 16,
+    blurb: 'Grey speckles. Minecraft tints this texture green by biome, so it stays grey here.',
+    build() {
+      const { g, out } = texGraph();
+      const white = add(g, 'whiteNoise', 40, 60);
+      const range = add(g, 'remap', 300, 60, {}, { c: 0.55, d: 0.88 });
+      wire(g, white, 'v', range, 'x');
+      wire(g, range, 'out', out, 'color');
+      return g;
+    },
+  },
+  {
+    id: 'leaves', name: 'Leaves', target: 'block/oak_leaves', size: 16,
+    blurb: 'Grey leaves with see-through gaps. Minecraft tints them green.',
+    build() {
+      const { g, out } = texGraph();
+      const white = add(g, 'whiteNoise', 40, 60);
+      const range = add(g, 'remap', 300, 40, {}, { c: 0.38, d: 0.82 });
+      const split = add(g, 'split', 300, 260);
+      const holes = add(g, 'step', 540, 260, {}, { e: 0.2 });
+      wire(g, white, 'v', range, 'x');
+      wire(g, white, 'rgb', split, 'v');
+      wire(g, split, 'y', holes, 'x');
+      wire(g, range, 'out', out, 'color');
+      wire(g, holes, 'out', out, 'alpha');
+      return g;
+    },
+  },
+  {
+    id: 'marble', name: 'Marble', target: '', size: 64,
+    blurb: 'Veined marble from a distorted Wave Texture. Use it in a shader through Image Texture.',
+    build() {
+      const { g, out } = texGraph();
+      const wave = add(g, 'waveTexture', 40, 40, { kind: 'bands', dir: 'diagonal', profile: 'sine' }, { s: 0.35, d: 7, ds: 0.7 });
+      const ramp = add(g, 'gradient', 320, 60, { stops: [{ c: '#5f5853', t: 0 }, { c: '#cfc8bd', t: 0.35 }, { c: '#f3f0e9', t: 1 }] });
+      wire(g, wave, 'fac', ramp, 't');
+      wire(g, ramp, 'rgb', out, 'color');
+      return g;
+    },
+  },
+  {
+    id: 'hellfire', name: 'Hellfire', target: 'block/glowstone', size: 32,
+    blurb: 'Glowing infernal swirls: Magic Texture heated through Blackbody. Replaces glowstone.',
+    build() {
+      const { g, out } = texGraph();
+      const magic = add(g, 'magic', 40, 40, { depth: '3' }, { s: 0.55, d: 2.2 });
+      const heat = add(g, 'remap', 300, 60, {}, { c: 900, d: 3600 });
+      const bb = add(g, 'blackbody', 540, 60);
+      const boost = add(g, 'multiply', 540, 240, {}, { b: 1.25 });
+      wire(g, magic, 'fac', heat, 'x');
+      wire(g, heat, 'out', bb, 't');
+      wire(g, bb, 'rgb', boost, 'a');
+      wire(g, boost, 'out', out, 'color');
+      return g;
+    },
+  },
+  {
+    id: 'blank', name: 'Blank', target: '', size: 16,
+    blurb: 'An empty texture graph.',
+    build() {
+      return texGraph().g;
+    },
+  },
+];
