@@ -1163,7 +1163,7 @@ function grassSection() {
     rr.append(range, out);
     sec.append(field(label, rr, hint));
   };
-  slider('Blades', 'density', GRASS_CHOICES.density, (v) => `${v * 2} per block`, 'More blades look fuller and cost more FPS.');
+  slider('Blades', 'density', GRASS_CHOICES.density, (v) => `${v} per block`, 'More blades look fuller and cost more FPS. They thin out with distance.');
   slider('Height', 'height', GRASS_CHOICES.height, (v) => `${v} blocks`, 'Average blade height. Each blade is a bit taller or shorter.');
   slider('Wind', 'wind', GRASS_CHOICES.wind, (v) => (v ? `${v}×` : 'still'), 'How much the blades sway. In game they sway more in rain.');
   slider('Distance', 'distance', GRASS_CHOICES.distance, (v) => `${v} blocks`, 'How far from the player blades grow in game. They thin out towards the edge.');

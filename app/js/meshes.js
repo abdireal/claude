@@ -924,15 +924,15 @@ function bladeTexture(size = 16) {
   });
 }
 
-// A tuft of 14 blades: replaces short grass, sways from its root.
+// A tuft of 48 blades: replaces short grass, sways from its root.
 export function sampleGrassTuft() {
   const b = meshBuilder();
-  for (let i = 0; i < 14; i++) {
+  for (let i = 0; i < 48; i++) {
     const a = hash2(i, 3) * Math.PI * 2;
     const d = 0.04 + hash2(i, 7) * 0.32;
     const base = [0.5 + Math.cos(a) * d, 0, 0.5 + Math.sin(a) * d];
     const h = 0.3 + hash2(i, 11) ** 1.5 * 0.6;
-    blade(b, 0, base, h, 0.035 + hash2(i, 13) * 0.03, hash2(i, 17) * Math.PI * 2, 0.04 + d * 0.6 + hash2(i, 23) * 0.08, 0.06 + hash2(i, 19) * 0.88);
+    blade(b, 0, base, h, 0.025 + hash2(i, 13) * 0.02, hash2(i, 17) * Math.PI * 2, 0.04 + d * 0.6 + hash2(i, 23) * 0.08, 0.06 + hash2(i, 19) * 0.88);
   }
   const mesh = b.build([{ name: 'blades', color: [0.38, 0.66, 0.24], image: 0 }]);
   return { mesh, textures: [{ name: 'Grass blades', ...bladeTexture() }] };
@@ -966,10 +966,12 @@ export function sampleGrassBlock() {
   quad(1, [[0, 1, 0], [0, 0, 0], [0, 0, 1], [0, 1, 1]], [-1, 0, 0], side);
   quad(1, [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], [0, -1, 0], [[0.6, 0.6], [0.9, 0.6], [0.9, 0.9], [0.6, 0.9]]);
   quad(0, [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]], [0, 1, 0], [[0.02, 0.98], [0.48, 0.98], [0.48, 0.02], [0.02, 0.02]]);
-  for (let i = 0; i < 18; i++) {
-    const base = [0.06 + hash2(i, 21) * 0.88, 1, 0.06 + hash2(i, 23) * 0.88];
+  // 40 blades: this model is on every grass block in the world, so it stays light
+  // (the shader's 3D grass is the way to a dense field).
+  for (let i = 0; i < 40; i++) {
+    const base = [0.04 + hash2(i, 21) * 0.92, 1, 0.04 + hash2(i, 23) * 0.92];
     const h = 0.12 + hash2(i, 29) ** 1.5 * 0.32;
-    blade(b, 0, base, h, 0.03 + hash2(i, 31) * 0.02, hash2(i, 37) * Math.PI * 2, 0.02 + hash2(i, 41) * 0.07, 0.03 + hash2(i, 43) * 0.44);
+    blade(b, 0, base, h, 0.022 + hash2(i, 31) * 0.018, hash2(i, 37) * Math.PI * 2, 0.02 + hash2(i, 41) * 0.07, 0.03 + hash2(i, 43) * 0.44);
   }
   const mesh = b.build([
     { name: 'grass', color: [0.38, 0.66, 0.24], image: 0 },
@@ -988,12 +990,12 @@ export function identityFit(mesh) {
 // Tall grass: two blocks high, drawn by the lower half (the upper half is empty).
 export function sampleTallGrass() {
   const b = meshBuilder();
-  for (let i = 0; i < 16; i++) {
+  for (let i = 0; i < 56; i++) {
     const a = hash2(i, 53) * Math.PI * 2;
     const d = 0.04 + hash2(i, 57) * 0.3;
     const base = [0.5 + Math.cos(a) * d, 0, 0.5 + Math.sin(a) * d];
     const h = 0.7 + hash2(i, 61) ** 1.3 * 1.0;
-    blade(b, 0, base, h, 0.045 + hash2(i, 67) * 0.035, hash2(i, 71) * Math.PI * 2, 0.08 + d * 0.7 + hash2(i, 73) * 0.12, 0.06 + hash2(i, 79) * 0.88);
+    blade(b, 0, base, h, 0.03 + hash2(i, 67) * 0.025, hash2(i, 71) * Math.PI * 2, 0.08 + d * 0.7 + hash2(i, 73) * 0.12, 0.06 + hash2(i, 79) * 0.88);
   }
   const mesh = b.build([{ name: 'blades', color: [0.38, 0.66, 0.24], image: 0 }]);
   return { mesh, textures: [{ name: 'Tall grass blades', ...bladeTexture() }] };

@@ -449,19 +449,19 @@ const hash = (a, b, c) => {
   return v - Math.floor(v);
 };
 function buildGrassBlades(tops, cfg, time, rain) {
-  const out = new Float32Array(tops.length * cfg.density * 2 * 3 * 16);
+  const out = new Float32Array(tops.length * cfg.density * 3 * 16);
   const [u0, v0] = [(TILE.grassTop % ATLAS_TILES) / ATLAS_TILES, Math.floor(TILE.grassTop / ATLAS_TILES) / ATLAS_TILES];
   const s = 1 / ATLAS_TILES;
   let o = 0;
   for (const [x, y, z, bl, sky] of tops) {
     // patchy, like the game: some blocks full, some thin
     const patch = 0.3 + 0.7 * Math.min(1, Math.max(0, (hash(Math.floor(x / 3), Math.floor(z / 3), 9) - 0.2) / 0.55));
-    const count = Math.round(cfg.density * 2 * patch);
+    const count = Math.round(cfg.density * patch);
     for (let k = 0; k < count; k++) {
       const r1 = hash(x, z, k), r2 = hash(z, x, k + 7), r3 = hash(x + k, z, 3), r4 = hash(x, z + k, 5), r5 = hash(k, x, z), r6 = hash(z + k, k, x);
       const bx = x + 0.05 + r1 * 0.9, bz = z + 0.05 + r2 * 0.9;
       const h = cfg.height * (0.45 + 1.1 * r3 * r3) * (0.75 + 0.4 * patch);
-      const half = 0.025 + 0.03 * r4;
+      const half = 0.02 + 0.025 * r4;
       // the grass tint pushed towards fresh green, each blade a little different
       const g = TINT.grass.map((c, i) => c * (0.35 + 0.65 * [0.8, 1.15, 0.55][i]));
       const green = [g[0] * (0.82 + 0.28 * r6), g[1] * (0.95 + 0.13 * r6), g[2] * (0.75 - 0.05 * r6)];
