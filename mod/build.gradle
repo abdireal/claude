@@ -82,6 +82,10 @@ tasks.register('runProductionClientGameTest', net.fabricmc.loom.task.prod.Client
 	mods.from(configurations.productionMods)
 	mods.from(remapJar.archiveFile, remapGametestJar.archiveFile)
 	mods.from(fileTree('extra-mods') { include '*.jar' })
-	jvmArgs.add('-Dfabric.client.gametest')
+	jvmArgs.addAll([
+		'-Dfabric.client.gametest',
+		// Like Fabric API's own production test run: the packet synchronizer only works in dev.
+		'-Dfabric.client.gametest.disableNetworkSynchronizer=true',
+	])
 	dependsOn remapJar, remapGametestJar
 }

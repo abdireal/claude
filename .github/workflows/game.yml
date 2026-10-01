@@ -60,14 +60,12 @@ jobs:
           grep "World loading finished" "$log" | cut -c1-300 | tail -4 || true
           echo "--- end of the log"
           tail -40 "$log" | cut -c1-400
-      - name: Screenshots as JPEG
+      - name: Collect screenshots
         if: always()
         run: |
           out="$GITHUB_WORKSPACE/shots/${{ matrix.variant }}"
           mkdir -p "$out"
-          find run -path '*screenshots*' -name '*.png' | sort | while read -r f; do
-            convert "$f" -quality 86 "$out/$(basename "${f%.png}").jpg"
-          done
+          find run -path '*screenshots*' -name '*.png' -exec cp {} "$out/" \;
           ls -la "$out"
       - uses: actions/upload-artifact@v4
         if: always()
