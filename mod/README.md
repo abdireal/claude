@@ -70,6 +70,14 @@ BlockGraph writes all of this for you.
 
 If the OBJ file is missing or broken, the model shows a small cube with the particle texture and the log says why.
 
+## In-game test
+
+`src/gametest` is a small test mod for CI. GitHub Actions ([`game.yml`](../.github/workflows/game.yml)) starts real Minecraft 1.21.11 from the released jars, turns on a resource pack exported by BlockGraph (Sting on the netherite sword, a sample sword on the diamond sword, crystals on the flower pot), checks that every OBJ mesh loaded, and takes screenshots in a flat creative world. A second run adds Sodium, Iris and a BlockGraph shader pack. Start the workflow by hand to have the screenshots committed to `screenshots/`.
+
+```
+./gradlew runProductionClientGameTest
+```
+
 ## Build
 
 ```
