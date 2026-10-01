@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "blockgraph_models_gametest",
+  "version": "1.0.0",
+  "name": "BlockGraph Models in-game test",
+  "description": "Starts a world with a BlockGraph resource pack and takes screenshots of the models. Only used by CI.",
+  "environment": "client",
+  "entrypoints": {
+    "fabric-client-gametest": ["dev.blockgraph.models.gametest.ModelsInGameTest"]
+  },
+  "depends": {
+    "blockgraph_models": "*",
+    "fabric-client-gametest-api-v1": "*"
+  }
+}

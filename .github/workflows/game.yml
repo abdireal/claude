@@ -1,0 +1,93 @@
+name: Minecraft in-game test
+
+# Starts real Minecraft 1.21.11 with the BlockGraph Models mod and a resource
+# pack exported by BlockGraph, checks that every model loads, and takes
+# screenshots. The iris run adds Sodium, Iris and a BlockGraph shader pack.
+on:
+  push:
+    paths:
+      - 'mod/**'
+      - '.github/workflows/game.yml'
+  workflow_dispatch:
+    inputs:
+      commit_screenshots:
+        description: Commit the screenshots to mod/screenshots on this branch
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  game:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [vanilla, iris]
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: mod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Add Sodium, Iris and the BlockGraph shader pack
+        if: matrix.variant == 'iris'
+        run: |
+          mkdir -p extra-mods run/shaderpacks run/config
+          for p in sodium iris; do
+            meta=$(curl -fsSL -A "abdireal/claude BlockGraph CI" "https://api.modrinth.com/v2/project/$p/version?game_versions=%5B%221.21.11%22%5D&loaders=%5B%22fabric%22%5D")
+            url=$(echo "$meta" | jq -r '([.[] | select(.version_type == "release")] + .)[0].files[] | select(.primary) | .url')
+            echo "$p: $url"
+            curl -fsSL -o "extra-mods/$p.jar" "$url"
+          done
+          cp src/gametest/resources/blockgraph-test-shaders.zip run/shaderpacks/
+          printf 'shaderPack=blockgraph-test-shaders.zip\nenableShaders=true\n' > run/config/iris.properties
+          ls -la extra-mods run/shaderpacks
+      - name: Run the game
+        run: chmod +x gradlew && ./gradlew runProductionClientGameTest --stacktrace --no-daemon
+      - name: Game log (models, packs, shaders, errors)
+        if: always()
+        run: |
+          log=$(find run -name latest.log | head -1)
+          echo "log: $log"
+          grep -iE "blockgraph|obj mesh|resource pack|iris|sodium|shader|error|exception|warn.*model" "$log" | grep -v "Missing sound" | head -300 || true
+      - name: Screenshots as JPEG
+        if: always()
+        run: |
+          out="$GITHUB_WORKSPACE/shots/${{ matrix.variant }}"
+          mkdir -p "$out"
+          find run -path '*screenshots*' -name '*.png' | sort | while read -r f; do
+            convert "$f" -quality 86 "$out/$(basename "${f%.png}").jpg"
+          done
+          ls -la "$out"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: screenshots-${{ matrix.variant }}
+          path: shots/
+          if-no-files-found: warn
+
+  commit:
+    needs: game
+    if: always() && github.event_name == 'workflow_dispatch' && inputs.commit_screenshots
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: screenshots-*
+          merge-multiple: true
+          path: mod/screenshots
+      - name: Commit the screenshots
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add mod/screenshots
+          if git diff --cached --quiet; then echo "No screenshots changed"; exit 0; fi
+          git commit -m "Update in-game screenshots from the Minecraft test run"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

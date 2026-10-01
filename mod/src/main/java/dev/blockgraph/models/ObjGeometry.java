@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.joml.Matrix3f;
 import org.joml.Matrix4f;
@@ -43,6 +44,10 @@ import net.fabricmc.fabric.api.renderer.v1.model.ModelBakeSettingsHelper;
 public record ObjGeometry(Identifier location, ObjOptions options) implements UnbakedGeometry {
 	private static final float EDGE = 1.0e-4f;
 
+	/** How many meshes were baked and how many failed since the game started (for tests and debugging). */
+	public static final AtomicInteger BAKED = new AtomicInteger();
+	public static final AtomicInteger FAILED = new AtomicInteger();
+
 	@Override
 	public QuadCollection bake(TextureSlots textures, ModelBaker baker, ModelState settings, ModelDebugName name) {
 		MutableMesh builder = Renderer.get().mutableMesh();
@@ -54,6 +59,7 @@ public record ObjGeometry(Identifier location, ObjOptions options) implements Un
 		try {
 			mesh = load(location);
 		} catch (IOException e) {
+			FAILED.incrementAndGet();
 			BlockGraphModels.LOGGER.error("{}: could not load mesh {}: {}", name.debugName(), location, e.getMessage());
 			emitErrorCube(emitter, sprite(textures, baker, name, ""));
 			return new MeshBakedGeometry(builder.immutableCopy());
@@ -118,6 +124,7 @@ public record ObjGeometry(Identifier location, ObjOptions options) implements Un
 			emitter.emit();
 		}
 
+		BAKED.incrementAndGet();
 		return new MeshBakedGeometry(builder.immutableCopy());
 	}
 

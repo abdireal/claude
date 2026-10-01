@@ -9,11 +9,36 @@ base {
 	archivesName = project.archives_base_name
 }
 
+// The in-game test (src/gametest) is a separate small mod, only used by CI.
+sourceSets {
+	gametest {
+		compileClasspath += sourceSets.main.compileClasspath + sourceSets.main.output
+		runtimeClasspath += sourceSets.main.runtimeClasspath + sourceSets.main.output
+	}
+}
+
+loom {
+	createRemapConfigurations(sourceSets.gametest)
+}
+
+configurations {
+	// Mods for the production test run, as released jars.
+	productionMods {
+		transitive = false
+	}
+}
+
 dependencies {
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
 	mappings loom.officialMojangMappings()
 	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+
+	// Not part of the Fabric API jar.
+	modGametestImplementation fabricApi.module("fabric-client-gametest-api-v1", project.fabric_api_version)
+
+	productionMods "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
+	productionMods fabricApi.module("fabric-client-gametest-api-v1", project.fabric_api_version)
 }
 
 processResources {
@@ -33,4 +58,30 @@ tasks.withType(JavaCompile).configureEach {
 java {
 	sourceCompatibility = JavaVersion.VERSION_21
 	targetCompatibility = JavaVersion.VERSION_21
+}
+
+tasks.register('gametestJar', Jar) {
+	from sourceSets.gametest.output
+	destinationDirectory = layout.buildDirectory.dir('devlibs')
+	archiveClassifier = 'gametest'
+}
+
+tasks.register('remapGametestJar', net.fabricmc.loom.task.RemapJarTask) {
+	dependsOn gametestJar
+	input = gametestJar.flatMap { it.archiveFile }
+	destinationDirectory = layout.buildDirectory.dir('gametest-libs')
+	archiveClassifier = 'gametest'
+	addNestedDependencies = false
+	classpath.from(sourceSets.gametest.compileClasspath)
+}
+
+// Starts the real game (released jars, like a player's install) and runs the
+// in-game test. Screenshots land in run/screenshots. Jars in extra-mods/ (for
+// example Sodium and Iris) are added too.
+tasks.register('runProductionClientGameTest', net.fabricmc.loom.task.prod.ClientProductionRunTask) {
+	mods.from(configurations.productionMods)
+	mods.from(remapJar.archiveFile, remapGametestJar.flatMap { it.archiveFile })
+	mods.from(fileTree('extra-mods') { include '*.jar' })
+	jvmArgs.add('-Dfabric.client.gametest')
+	dependsOn remapJar, remapGametestJar
 }
