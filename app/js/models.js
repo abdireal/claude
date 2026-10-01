@@ -67,10 +67,11 @@ const armorSlot = (id) => {
 // How a block model turns with its block: by facing (chests, wall signs,
 // furnaces), by the 16 rotations of standing signs, banners and heads, or a
 // bed's two halves.
-const TURNS = { none: 'Does not turn', facing: 'With its facing (north, east, south, west)', rotation: 'With its rotation (standing signs, banners, heads)', bed: 'As a bed (two blocks, head and foot)' };
+const TURNS = { none: 'Does not turn', facing: 'With its facing (north, east, south, west)', rotation: 'With its rotation (standing signs, banners, heads)', bed: 'As a bed (two blocks, head and foot)', tall: 'As a two-block plant (the lower half draws it)' };
 function autoTurn(id) {
   const p = String(id || '').replace(/^minecraft:/, '');
   if (/_bed$/.test(p)) return 'bed';
+  if (/^(tall_grass|large_fern|sunflower|lilac|rose_bush|peony|tall_seagrass|tall_dry_grass|pitcher_plant)$/.test(p)) return 'tall';
   if (/wall_|chest$|shulker_box$|furnace$|smoker$|lectern$|stonecutter$|grindstone$|anvil$|campfire$/.test(p)) return 'facing';
   if (/(_sign|_banner|_head|_skull)$/.test(p) && !/hanging/.test(p)) return 'rotation';
   return 'none';
@@ -377,7 +378,7 @@ function withPaletteUVs(mesh) {
 
 // --------------------------------------------------------------- create
 
-function addModel(mesh, { name, use = 'custom', target = '', base = 'minecraft:stick', hold = 'item', texFor = [], glowFor = [], surfaceFor = [], fit = null, turn = 'none' }) {
+function addModel(mesh, { name, use = 'custom', target = '', base = 'minecraft:stick', hold = 'item', texFor = [], glowFor = [], surfaceFor = [], fit = null, turn = 'none', random = false }) {
   const meshId = newMeshId();
   storeMesh(meshId, mesh);
   const model = {
@@ -391,6 +392,7 @@ function addModel(mesh, { name, use = 'custom', target = '', base = 'minecraft:s
     facing: false,
     fit: { ...M.DEFAULT_FIT, r: [0, 0, 0], t: [0, 0, 0] },
     turn,
+    random,
     mats: mesh.materials.map((m, i) => ({ name: m.name, tex: texFor[i] || '', glow: !!(glowFor[i] ?? m.glow), tint: !!m.tint, surface: surfaceFor[i] || (m.maps ? 'file' : 'matte') })),
   };
   model.fit = fit || poseFit(model, mesh);
@@ -426,13 +428,22 @@ function addSampleTextures(textures, modelName) {
 export function addSample(kind) {
   if (kind === 'grass' || kind === 'grassBlock') {
     // Made in block units, so they keep their size: blades sway from the root in game.
-    const s = kind === 'grass' ? M.sampleGrassTuft() : M.sampleGrassBlock();
-    const tex = addSampleTextures(s.textures, kind === 'grass' ? 'Grass' : 'Grass block');
-    addModel(s.mesh, {
-      name: kind === 'grass' ? 'Low-poly grass' : 'Low-poly grass block', use: 'block',
-      target: kind === 'grass' ? 'minecraft:short_grass' : 'minecraft:grass_block', hold: 'block',
-      texFor: s.mesh.materials.map(() => tex[0]), fit: M.identityFit(s.mesh),
-    });
+    // "grass" is the whole set: short grass, tall grass, fern and large fern.
+    const set = kind === 'grassBlock'
+      ? [['Low-poly grass block', 'grass_block', M.sampleGrassBlock()]]
+      : [
+        ['Low-poly grass', 'short_grass', M.sampleGrassTuft()],
+        ['Low-poly tall grass', 'tall_grass', M.sampleTallGrass()],
+        ['Low-poly fern', 'fern', M.sampleFern(false)],
+        ['Low-poly large fern', 'large_fern', M.sampleFern(true)],
+      ];
+    for (const [name, block, s] of set) {
+      const tex = addSampleTextures(s.textures, s.textures[0].name);
+      addModel(s.mesh, {
+        name, use: 'block', target: `minecraft:${block}`, hold: 'block', turn: autoTurn(block),
+        texFor: s.mesh.materials.map(() => tex[0]), fit: M.identityFit(s.mesh), random: true,
+      });
+    }
   } else if (kind === 'crystal') {
     const s = M.sampleCrystal();
     const tex = addSampleTextures(s.textures, 'Crystal');
@@ -1070,8 +1081,19 @@ function renderProps() {
       }
       turn.value = turnOf(m);
       turn.addEventListener('change', () => { m.turn = turn.value; m.facing = turn.value === 'facing'; commit(); });
+      if (turnOf(m) === 'none' || turnOf(m) === 'tall') {
+        const rw = el('label', 'ctl-switch');
+        const rb = el('input');
+        rb.type = 'checkbox';
+        rb.checked = !!m.random;
+        rb.addEventListener('change', () => { m.random = rb.checked; commit(); });
+        rw.append(rb, el('span', 'switch'), el('span', null, 'Random rotation'));
+        rw.title = 'Each block turns its model a random quarter turn, so a field of them never repeats (like vanilla grass)';
+        box.append(rw);
+      }
       box.append(field('Turn with the block', turn, turnOf(m) === 'bed'
         ? 'Model the whole bed facing north: the pillow end in the blue block, the foot end one block towards +Z.'
+        : turnOf(m) === 'tall' ? 'Model the whole plant standing in the blue block and the one above it.'
         : 'Model it facing north (towards -Z). The game turns it to match each block.'));
     }
   }
@@ -1424,12 +1446,19 @@ export async function modelPackFiles(ns) {
       const turn = turnOf(m);
       const facings = [['north', 0], ['east', 90], ['south', 180], ['west', 270]];
       const turned = (r, y) => (y ? { model: r, y } : { model: r });
-      let variants = { '': { model: ref } };
+      // Random rotation: each block picks one of four turns (like vanilla grass), so they don't repeat.
+      let variants = { '': m.random ? [0, 90, 180, 270].map((y) => turned(ref, y)) : { model: ref } };
       if (turn === 'facing') {
         variants = Object.fromEntries(facings.map(([f, y]) => [`facing=${f}`, turned(ref, y)]));
       } else if (turn === 'rotation') {
         // 16 rotations, 0 = facing south; block models turn in 90° steps.
         variants = Object.fromEntries(Array.from({ length: 16 }, (_, r) => [`rotation=${r}`, turned(ref, (180 + 90 * (Math.round(r / 4) % 4)) % 360)]));
+      } else if (turn === 'tall') {
+        // Two-block plants: the lower half draws the whole plant, the upper half an empty model.
+        const empty = `${ns}:block/${key}_empty`;
+        files[`assets/${ns}/models/block/${key}_empty.obj`] = '# Empty: the lower half of the plant draws the whole model.\n';
+        files[`assets/${ns}/models/block/${key}_empty.json`] = json({ 'fabric:type': { id: 'blockgraph:obj', optional: true }, obj: `${ns}:models/block/${key}_empty.obj`, parent: 'minecraft:block/block', textures: { particle: textures.particle } });
+        variants = { 'half=lower': m.random ? [0, 90, 180, 270].map((y) => turned(ref, y)) : { model: ref }, 'half=upper': { model: empty } };
       } else if (turn === 'bed') {
         // The head half draws the whole bed; the foot half draws an empty
         // model, which still tells the mod to skip the vanilla bed there.
@@ -1574,7 +1603,7 @@ export async function initModels(context) {
     ['sting', 'Sting', 'Bilbo\u2019s sword with its blue inscription, replacing the netherite sword. About 1,100 triangles.'],
     ['sword', 'Sample: Sword', 'A low-poly sword that replaces the diamond sword.'],
     ['crystal', 'Sample: Crystal cluster', 'Glowing crystals that replace the flower pot block.'],
-    ['grass', 'Sample: Low-poly grass', 'A tuft of triangle blades that replaces short grass. Sways from the root, takes the biome colour.'],
+    ['grass', 'Sample: Low-poly grass and ferns', 'Short grass, tall grass, fern and large fern made of green triangle blades. Sway from the root, turn randomly.'],
     ['grassBlock', 'Sample: Low-poly grass block', 'A grass block with low-poly blades on top. The block stays still, the blades sway.'],
   ];
   const runSample = async (k) => {

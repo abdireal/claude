@@ -897,8 +897,8 @@ export function mobScale(mesh, height) {
 // ------------------------------------------------------------ grass samples
 // Low-poly grass in block units (0..1 is the block). Each blade is one
 // triangle, drawn from both sides, with its root at the bottom of the
-// texture (V = 1) and its tip at the top (V = 0). The "blades" material is
-// tinted by the biome in game, so its texture is a light green-grey.
+// texture (V = 1) and its tip at the top (V = 0). The texture is already
+// green, in a few shades: each blade picks a column, so blades differ.
 
 function blade(b, mat, base, h, w, yaw, lean, uvx) {
   const cx = Math.cos(yaw) * w, cz = Math.sin(yaw) * w;
@@ -913,25 +913,28 @@ function blade(b, mat, base, h, w, yaw, lean, uvx) {
   b.tri(k[1], k[0], k[2], mat);
 }
 
+// Columns of fresh, deep and yellowish greens, dark at the root, bright at the tip.
+const GREENS = [[96, 178, 62], [70, 150, 48], [128, 182, 64], [84, 164, 70], [110, 170, 52], [62, 138, 52], [140, 188, 76], [92, 160, 58]];
 function bladeTexture(size = 16) {
   return canvasBytes(size, (x, y) => {
     const g = y / (size - 1); // 0 at the tip, 1 at the root
-    const n = hash2(x * 7, y * 3) * 18;
-    return [205 - g * 75 + n, 225 - g * 70 + n, 185 - g * 80 + n];
+    const c = GREENS[Math.floor((x / size) * GREENS.length)];
+    const k = (1.18 - g * 0.6) * (0.94 + hash2(x * 7, y * 3) * 0.12);
+    return [c[0] * k, c[1] * k, c[2] * k];
   });
 }
 
-// A tuft of 11 blades: replaces short grass, sways from its root.
+// A tuft of 14 blades: replaces short grass, sways from its root.
 export function sampleGrassTuft() {
   const b = meshBuilder();
-  for (let i = 0; i < 11; i++) {
-    const a = (i / 11) * Math.PI * 2 + hash2(i, 3) * 0.6;
-    const d = 0.08 + hash2(i, 7) * 0.24;
+  for (let i = 0; i < 14; i++) {
+    const a = hash2(i, 3) * Math.PI * 2;
+    const d = 0.04 + hash2(i, 7) * 0.32;
     const base = [0.5 + Math.cos(a) * d, 0, 0.5 + Math.sin(a) * d];
-    const h = 0.42 + hash2(i, 11) * 0.42;
-    blade(b, 0, base, h, 0.045 + hash2(i, 13) * 0.02, a + Math.PI / 2 + (hash2(i, 17) - 0.5), 0.06 + d * 0.5, 0.2 + hash2(i, 19) * 0.6);
+    const h = 0.3 + hash2(i, 11) ** 1.5 * 0.6;
+    blade(b, 0, base, h, 0.035 + hash2(i, 13) * 0.03, hash2(i, 17) * Math.PI * 2, 0.04 + d * 0.6 + hash2(i, 23) * 0.08, 0.06 + hash2(i, 19) * 0.88);
   }
-  const mesh = b.build([{ name: 'blades', color: [0.45, 0.68, 0.3], image: 0, tint: true }]);
+  const mesh = b.build([{ name: 'blades', color: [0.38, 0.66, 0.24], image: 0 }]);
   return { mesh, textures: [{ name: 'Grass blades', ...bladeTexture() }] };
 }
 
@@ -939,11 +942,15 @@ export function sampleGrassTuft() {
 // (dirt sides, grass top); only the blades sway.
 export function sampleGrassBlock() {
   const b = meshBuilder();
-  // texture: left half grass (tinted), right half dirt side with a green rim
+  // texture: left half green grass (top and blades), right half dirt side with a green rim
   const tex = canvasBytes(32, (x, y) => {
     const n = hash2(x * 5, y * 9);
-    if (x < 16) { const v = 170 + n * 50; return [v, v + 12, v - 18]; }
-    if (y < 3 + (hash2(x, 1) > 0.5 ? 1 : 0)) return [96 + n * 30, 140 + n * 30, 60 + n * 20];
+    if (x < 16) {
+      const c = GREENS[Math.floor(hash2(x, y) * GREENS.length)];
+      const k = 0.88 + n * 0.22;
+      return [c[0] * k, c[1] * k, c[2] * k];
+    }
+    if (y < 3 + (hash2(x, 1) > 0.5 ? 1 : 0)) return [80 + n * 30, 150 + n * 30, 52 + n * 20];
     return [118 + n * 30, 84 + n * 22, 58 + n * 18];
   });
   const quad = (mat, corners, n, uvs) => {
@@ -959,13 +966,13 @@ export function sampleGrassBlock() {
   quad(1, [[0, 1, 0], [0, 0, 0], [0, 0, 1], [0, 1, 1]], [-1, 0, 0], side);
   quad(1, [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], [0, -1, 0], [[0.6, 0.6], [0.9, 0.6], [0.9, 0.9], [0.6, 0.9]]);
   quad(0, [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]], [0, 1, 0], [[0.02, 0.98], [0.48, 0.98], [0.48, 0.02], [0.02, 0.02]]);
-  for (let i = 0; i < 14; i++) {
-    const base = [0.08 + hash2(i, 21) * 0.84, 1, 0.08 + hash2(i, 23) * 0.84];
-    const h = 0.18 + hash2(i, 29) * 0.22;
-    blade(b, 0, base, h, 0.035 + hash2(i, 31) * 0.015, hash2(i, 37) * Math.PI, 0.03 + hash2(i, 41) * 0.05, 0.12 + hash2(i, 43) * 0.25);
+  for (let i = 0; i < 18; i++) {
+    const base = [0.06 + hash2(i, 21) * 0.88, 1, 0.06 + hash2(i, 23) * 0.88];
+    const h = 0.12 + hash2(i, 29) ** 1.5 * 0.32;
+    blade(b, 0, base, h, 0.03 + hash2(i, 31) * 0.02, hash2(i, 37) * Math.PI * 2, 0.02 + hash2(i, 41) * 0.07, 0.03 + hash2(i, 43) * 0.44);
   }
   const mesh = b.build([
-    { name: 'grass', color: [0.45, 0.68, 0.3], image: 0, tint: true },
+    { name: 'grass', color: [0.38, 0.66, 0.24], image: 0 },
     { name: 'dirt', color: [0.5, 0.36, 0.25], image: 0 },
   ]);
   return { mesh, textures: [{ name: 'Grass block', ...tex }] };
@@ -976,4 +983,70 @@ export function identityFit(mesh) {
   const b = bounds(mesh.pos);
   const c = [0, 1, 2].map((k) => (b.min[k] + b.max[k]) / 2);
   return { s: Math.max(...b.size), r: [0, 0, 0], t: [c[0] - 0.5, c[1] - 0.5, c[2] - 0.5] };
+}
+
+// Tall grass: two blocks high, drawn by the lower half (the upper half is empty).
+export function sampleTallGrass() {
+  const b = meshBuilder();
+  for (let i = 0; i < 16; i++) {
+    const a = hash2(i, 53) * Math.PI * 2;
+    const d = 0.04 + hash2(i, 57) * 0.3;
+    const base = [0.5 + Math.cos(a) * d, 0, 0.5 + Math.sin(a) * d];
+    const h = 0.7 + hash2(i, 61) ** 1.3 * 1.0;
+    blade(b, 0, base, h, 0.045 + hash2(i, 67) * 0.035, hash2(i, 71) * Math.PI * 2, 0.08 + d * 0.7 + hash2(i, 73) * 0.12, 0.06 + hash2(i, 79) * 0.88);
+  }
+  const mesh = b.build([{ name: 'blades', color: [0.38, 0.66, 0.24], image: 0 }]);
+  return { mesh, textures: [{ name: 'Tall grass blades', ...bladeTexture() }] };
+}
+
+// A fern frond: a leaf that arches out and droops, three segments and a tip,
+// drawn from both sides. Root at V = 1, tip at V = 0.
+function frond(b, mat, base, yaw, len, up, width, uvx) {
+  const dir = [Math.cos(yaw), 0, Math.sin(yaw)];
+  const side = [-dir[2], 0, dir[0]];
+  const spine = [0, 0.33, 0.66, 1].map((t) => [
+    base[0] + dir[0] * len * t,
+    base[1] + up * Math.sin(t * Math.PI * 0.75) + up * 0.15 * t,
+    base[2] + dir[2] * len * t,
+  ]);
+  const widths = [0.25, 1, 0.8, 0];
+  const L = spine.map((p, i) => [p[0] - side[0] * width * widths[i], p[1], p[2] - side[2] * width * widths[i]]);
+  const R = spine.map((p, i) => [p[0] + side[0] * width * widths[i], p[1], p[2] + side[2] * width * widths[i]]);
+  for (let i = 0; i < 3; i++) {
+    const v0 = 1 - i / 3, v1 = 1 - (i + 1) / 3;
+    const quad = [L[i], R[i], R[i + 1], L[i + 1]];
+    const uv = [[uvx - 0.05, v0], [uvx + 0.05, v0], [uvx + 0.05, v1], [uvx - 0.05, v1]];
+    const n = faceNormal(quad[0], quad[1], quad[2]);
+    const f = quad.map((p, k) => b.vertex(p, uv[k], n));
+    b.tri(f[0], f[1], f[2], mat);
+    b.tri(f[0], f[2], f[3], mat);
+    const back = n.map((x) => -x);
+    const k2 = quad.map((p, k) => b.vertex(p, uv[k], back));
+    b.tri(k2[0], k2[2], k2[1], mat);
+    b.tri(k2[0], k2[3], k2[2], mat);
+  }
+}
+
+function fernTexture(size = 16) {
+  return canvasBytes(size, (x, y) => {
+    const g = y / (size - 1);
+    const c = GREENS[(Math.floor((x / size) * GREENS.length) + 3) % GREENS.length];
+    const rib = Math.abs((x % (size / GREENS.length)) - size / GREENS.length / 2) < 0.6 ? 1.15 : 1; // a lighter midrib
+    const k = (1.05 - g * 0.5) * rib * (0.92 + hash2(x * 3, y * 11) * 0.12);
+    return [c[0] * k * 0.85, c[1] * k, c[2] * k * 0.8];
+  });
+}
+
+// A fern (one block) or a large fern (two blocks, drawn by the lower half).
+export function sampleFern(large = false) {
+  const b = meshBuilder();
+  const n = large ? 9 : 7;
+  for (let i = 0; i < n; i++) {
+    const yaw = (i / n) * Math.PI * 2 + (hash2(i, 83) - 0.5) * 0.7;
+    const len = (large ? 0.55 : 0.36) + hash2(i, 89) * (large ? 0.2 : 0.12);
+    const up = (large ? 1.25 : 0.55) * (0.7 + hash2(i, 97) * 0.45);
+    frond(b, 0, [0.5, 0, 0.5], yaw, len, up, large ? 0.1 : 0.075, 0.06 + hash2(i, 101) * 0.88);
+  }
+  const mesh = b.build([{ name: 'fronds', color: [0.3, 0.55, 0.22], image: 0 }]);
+  return { mesh, textures: [{ name: large ? 'Large fern' : 'Fern', ...fernTexture() }] };
 }

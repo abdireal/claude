@@ -1044,6 +1044,15 @@ float grassHash(vec3 p) {
 	return fract((p.x + p.y) * p.z);
 }
 
+// Smooth noise over the ground, so grass grows in fuller and thinner patches.
+float grassPatches(vec2 p) {
+	vec2 i = floor(p), f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	float a = grassHash(vec3(i, 1.0)), b = grassHash(vec3(i + vec2(1.0, 0.0), 1.0));
+	float c = grassHash(vec3(i + vec2(0.0, 1.0), 1.0)), d = grassHash(vec3(i + vec2(1.0, 1.0), 1.0));
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
 void passThrough(int i) {
 ${GRASS_VARYINGS.map(([, n]) => `\t${n} = vs_${n}[i];`).join('\n')}
 	gl_Position = gl_in[i].gl_Position;
@@ -1072,10 +1081,12 @@ void main() {
 	// only the top faces of grass blocks, and only near the player
 	if (vs_blockId[0] != ${BLOCK_IDS.grass} || vs_worldNormal[0].y < 0.9) return;
 	float dist = min(vs_viewDist[0], min(vs_viewDist[1], vs_viewDist[2]));
-	int count = int(float(BG_GRASS_DENSITY) * (1.0 - smoothstep(BG_GRASS_DISTANCE * 0.6, BG_GRASS_DISTANCE, dist)) + 0.5);
 	vec3 a = vs_worldPos[0], b = vs_worldPos[1], c = vs_worldPos[2];
-	vec3 toCam = cameraPosition - (a + b + c) / 3.0;
-	vec3 side = normalize(vec3(-toCam.z, 0.0, toCam.x) + vec3(1.0e-4, 0.0, 0.0));
+	vec3 centre = (a + b + c) / 3.0;
+	// patchy: some spots are full, some thin
+	float patch = mix(0.3, 1.0, smoothstep(0.2, 0.75, grassPatches(centre.xz * 0.18)));
+	int count = int(float(BG_GRASS_DENSITY) * patch * (1.0 - smoothstep(BG_GRASS_DISTANCE * 0.6, BG_GRASS_DISTANCE, dist)) + 0.5);
+	vec3 toCam = cameraPosition - centre;
 	for (int k = 0; k < ${maxBlades}; k++) {
 		if (k >= count) break;
 		// a random spot on this triangle, the same every frame
@@ -1087,8 +1098,12 @@ void main() {
 		vec2 uv = vs_texcoord[0] * w.x + vs_texcoord[1] * w.y + vs_texcoord[2] * w.z;
 		vec2 lm = vs_lmcoord[0] * w.x + vs_lmcoord[1] * w.y + vs_lmcoord[2] * w.z;
 		vec4 col = vs_glcolor[0] * w.x + vs_glcolor[1] * w.y + vs_glcolor[2] * w.z;
-		float h = BG_GRASS_HEIGHT * (0.55 + 0.9 * r3);
-		float halfWidth = 0.03 + 0.025 * r4;
+		float r5 = grassHash(seed + 51.9), r6 = grassHash(seed + 67.1);
+		float h = BG_GRASS_HEIGHT * (0.45 + 1.1 * r3 * r3) * mix(0.75, 1.15, patch);
+		float halfWidth = 0.025 + 0.03 * r4;
+		// each blade points its own way
+		float yaw = r5 * 6.2831853;
+		vec3 side = vec3(cos(yaw), 0.0, sin(yaw));
 		// the tip sways; gusts roll across the field, stronger in rain
 		float t = frameTimeCounter;
 		vec2 wind = vec2(sin(t * 1.9 + base.x * 0.7 + base.z * 0.3), sin(t * 1.4 + base.z * 0.8 - base.x * 0.2) * 0.6);
@@ -1100,9 +1115,12 @@ void main() {
 		if (dot(cross(p1 - p0, tip - p0), toCam) < 0.0) { vec3 s = p0; p0 = p1; p1 = s; }
 		vec3 n = normalize(vec3(0.0, 1.0, 0.0) + normalize(toCam) * 0.35);
 		vec4 tangent = vec4(side, 1.0);
-		bladeVertex(p0, uv, lm, vec4(col.rgb * 0.7, col.a), n, tangent, 0.0);
-		bladeVertex(p1, uv, lm, vec4(col.rgb * 0.7, col.a), n, tangent, 0.0);
-		bladeVertex(tip, uv, lm, vec4(col.rgb * 1.15, col.a), n, tangent, 1.0);
+		// green: the biome tint, pushed towards a fresh grass green, each blade a little different
+		vec3 green = mix(col.rgb, col.rgb * vec3(0.8, 1.15, 0.55), 0.65);
+		green *= mix(vec3(0.82, 0.95, 0.75), vec3(1.1, 1.08, 0.7), r6);
+		bladeVertex(p0, uv, lm, vec4(green * 0.62, col.a), n, tangent, 0.0);
+		bladeVertex(p1, uv, lm, vec4(green * 0.62, col.a), n, tangent, 0.0);
+		bladeVertex(tip, uv, lm, vec4(green * 1.2, col.a), n, tangent, 1.0);
 		EndPrimitive();
 	}
 #endif

@@ -454,11 +454,17 @@ function buildGrassBlades(tops, cfg, time, rain) {
   const s = 1 / ATLAS_TILES;
   let o = 0;
   for (const [x, y, z, bl, sky] of tops) {
-    for (let k = 0; k < cfg.density * 2; k++) {
-      const r1 = hash(x, z, k), r2 = hash(z, x, k + 7), r3 = hash(x + k, z, 3), r4 = hash(x, z + k, 5), r5 = hash(k, x, z);
+    // patchy, like the game: some blocks full, some thin
+    const patch = 0.3 + 0.7 * Math.min(1, Math.max(0, (hash(Math.floor(x / 3), Math.floor(z / 3), 9) - 0.2) / 0.55));
+    const count = Math.round(cfg.density * 2 * patch);
+    for (let k = 0; k < count; k++) {
+      const r1 = hash(x, z, k), r2 = hash(z, x, k + 7), r3 = hash(x + k, z, 3), r4 = hash(x, z + k, 5), r5 = hash(k, x, z), r6 = hash(z + k, k, x);
       const bx = x + 0.05 + r1 * 0.9, bz = z + 0.05 + r2 * 0.9;
-      const h = cfg.height * (0.55 + 0.9 * r3);
-      const half = 0.03 + 0.025 * r4;
+      const h = cfg.height * (0.45 + 1.1 * r3 * r3) * (0.75 + 0.4 * patch);
+      const half = 0.025 + 0.03 * r4;
+      // the grass tint pushed towards fresh green, each blade a little different
+      const g = TINT.grass.map((c, i) => c * (0.35 + 0.65 * [0.8, 1.15, 0.55][i]));
+      const green = [g[0] * (0.82 + 0.28 * r6), g[1] * (0.95 + 0.13 * r6), g[2] * (0.75 - 0.05 * r6)];
       const yaw = r5 * Math.PI;
       const sx = Math.cos(yaw) * half, sz = Math.sin(yaw) * half;
       const amp = (0.15 + 0.2 * rain) * cfg.wind * h;
@@ -466,13 +472,13 @@ function buildGrassBlades(tops, cfg, time, rain) {
       const wz = Math.sin(time * 1.4 + bz * 0.8 - bx * 0.2) * 0.6 * amp;
       const tip = [bx + (r4 - 0.5) * h * 0.5 + wx, y + h, bz + (r3 - 0.5) * h * 0.5 + wz];
       const u = u0 + UV_EPS + r1 * (s - 2 * UV_EPS), v = v0 + UV_EPS + r2 * (s - 2 * UV_EPS);
-      for (const [p, shade] of [[[bx - sx, y, bz - sz], 0.7], [[bx + sx, y, bz + sz], 0.7], [tip, 1.15]]) {
-        out.set([p[0], p[1], p[2], 0, 1, 0, u, v, TINT.grass[0] * shade, TINT.grass[1] * shade, TINT.grass[2] * shade, 1, bl, sky, 5, 1], o);
+      for (const [p, shade] of [[[bx - sx, y, bz - sz], 0.62], [[bx + sx, y, bz + sz], 0.62], [tip, 1.2]]) {
+        out.set([p[0], p[1], p[2], 0, 1, 0, u, v, green[0] * shade, green[1] * shade, green[2] * shade, 1, bl, sky, 5, 1], o);
         o += 16;
       }
     }
   }
-  return out;
+  return out.subarray(0, o);
 }
 
 // --------------------------------------------------------------- shaders
