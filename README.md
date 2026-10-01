@@ -18,7 +18,7 @@ It works like Unity Shader Graph: every node is a small piece of GLSL, and the g
 - **Vertex Offset.** Wire anything into it to move blocks themselves, for waving leaves and plants or rolling water.
 - **In-game settings.** Slider, On/Off and Dropdown Setting nodes become options in Iris → Shader Settings, with `shaders.properties` and language labels written for you.
 - **Live preview.** A small Minecraft-style scene in WebGL2 with procedural textures, day/night and rain controls, and its own shadow map. A held sword and shield, a chest and a zombie (which flashes red when hurt) use the Items & Entities graph.
-- **Presets.** Waving Plants, Shiny Weapons, Toon World, Retro TV, Night Vision, Dreamy Glow, Ocean Waves, Tiny Planet, Comic Outline, Lit & Bumpy and a blank start.
+- **Presets.** Waving Plants, Realistic (PBR + reflections), Shiny Weapons, Toon World, Retro TV, Night Vision, Dreamy Glow, Ocean Waves, Tiny Planet, Comic Outline, Lit & Bumpy and a blank start.
 - **View code.** See the exact GLSL each node produces.
 - Undo/redo, copy/paste, box select, autosave in the browser, and save/open graph files.
 
@@ -46,6 +46,19 @@ Its output compiles into six Iris programs:
 - **Models made with the BlockGraph Models mod.** OBJ meshes are drawn through the normal item and block paths, so they get these shaders too. The entity programs only use standard vertex data (position, UV, lightmap, colour and normal) and normalize safely, so meshes without `mc_Entity`, `mc_midTexCoord` or with zero-length normals still render. On terrain, missing `mc_Entity` and `mc_midTexCoord` read as 0, so modelled blocks simply don't wave.
 
 The **Shiny Weapons** preset shows it off: swords, tools, armour and shields are masked with Item ID Mask, their bright (metal) pixels get high Smoothness and Metallic, and Lit lighting makes them catch the sun and reflect the sky. A *Weapon Shine* slider appears in Iris → Shader Settings.
+
+## Realistic materials and reflections
+
+- **Material Maps node.** Reads the normal map and specular map that sit next to a texture (LabPBR `name_n.png` and `name_s.png`, which Iris loads). Outputs Normal, Smoothness, Metallic, Emission and AO for a Lit output. Textures without maps read as flat and matte, so it is safe to wire up everywhere.
+- **Reflections.** Lit surfaces reflect the sky (blurrier when rough), the ground below and nearby torchlight. In game, a *Reflections* pass (`composite`) then marches each smooth pixel's reflection across the screen and shows the world where it finds it, so polished metal and water mirror what is around them. Rays from the held item ignore the hand.
+- **Realistic (PBR + reflections)** preset: Lit blocks and items with Material Maps, mirror-smooth water, and the shiny-weapon mask for vanilla gear without maps. With the Sting sample it shows the engraved, polished steel and bronze from the original Blender file.
+
+| Setting | Iris option | What it does |
+| --- | --- | --- |
+| Screen reflections | `BG_REFLECTIONS` | Turns the Reflections pass on or off (`program.composite.enabled`). Off keeps the sky reflections |
+| Reflection quality | `BG_REFLECTION_STEPS` | Steps per reflection ray, 12 to 48 |
+
+Lit outputs write their normal and smoothness to `colortex1`, the reflection strength to `colortex2` and the sky they reflected to `colortex3`. The Post FX graph now runs in `composite1`.
 
 ## Shadows
 
@@ -93,6 +106,7 @@ What models cannot do:
 - Change hitboxes, or blocks drawn by block entity renderers (chests, signs, beds, banners, heads).
 - Animate. Bows, crossbows, compasses and clocks show one model the whole time.
 - Replacing a full cube (like stone) leaves holes, because neighbouring blocks hide their faces against it. Use non-full blocks.
+- Material maps: glTF normal, metal/roughness, occlusion and emission maps (and OBJ `map_Bump`, `Pr`, `Pm`, `map_Pr`, `map_Pm`, `Ke`, `map_Ke`) become LabPBR `_n` and `_s` textures next to the model's textures. Each material also has a *Surface* choice (from the file, matte, glossy, polished or brushed metal, gem) for models without maps. A shader reads them with Material Maps.
 - Shaders: item models (in hand, on the ground, in item displays) go through the Items & Entities graph, and block models through the Blocks graph, where **Block Type → Custom Models** singles them out. The live preview shows item models in your hand and block models on the grass.
 
 ## How it is built
