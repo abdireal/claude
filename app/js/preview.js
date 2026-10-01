@@ -92,6 +92,27 @@ export const TARGET_TILES = {
   'block/diamond_ore': TILE.diamond,
 };
 
+// Free atlas tiles the Models tab uses for model textures, and where the model
+// stands in the scene (on the grass, in front of the tree).
+export const MODEL_TILES = [13, 14, 15];
+export const MODEL_SPOT = [0, 1, 0];
+const UV_EPS = 0.0008;
+
+// Atlas coordinates of (u, v) inside a tile, v = 0 at the top of the tile.
+export function atlasUV(tile, u, v) {
+  const s = 1 / ATLAS_TILES;
+  const u0 = (tile % ATLAS_TILES) / ATLAS_TILES, v0 = Math.floor(tile / ATLAS_TILES) / ATLAS_TILES;
+  const c = (x) => Math.max(0, Math.min(1, x));
+  return [u0 + UV_EPS + c(u) * (s - 2 * UV_EPS), v0 + UV_EPS + c(v) * (s - 2 * UV_EPS)];
+}
+
+// Block light from the glowstone and sky light, the same as the scene's blocks.
+const GLOW_AT = [2.5, 1.5, -2.5];
+export function sceneLight(x, y, z) {
+  const d = Math.hypot(x - GLOW_AT[0], y - GLOW_AT[1], z - GLOW_AT[2]);
+  return [Math.max(0, Math.min(1, 1 - (d - 0.5) / 7)), 1];
+}
+
 // Accepts ImageData, an image or a canvas and returns something drawable.
 function toCanvas(img) {
   if (img instanceof ImageData) {
@@ -246,13 +267,9 @@ function buildScene() {
     [-3, 0, TILE.poppy], [2, 3, TILE.poppy], [1, -3, TILE.poppy],
   ];
 
-  const glow = [2.5, 1.5, -2.5];
   const lightAt = (cx, cy, cz, under) => {
-    const d = Math.hypot(cx - glow[0], cy - glow[1], cz - glow[2]);
-    const block = Math.max(0, Math.min(1, 1 - (d - 0.5) / 7));
-    let sky = 1;
-    if (under) sky = 0.72;
-    return [block, sky];
+    const [block] = sceneLight(cx, cy, cz);
+    return [block, under ? 0.72 : 1];
   };
   const underTree = (x, y, z) => x >= -4 && x <= 0 && z >= -4 && z <= 0 && y < 3.5;
 
@@ -269,7 +286,7 @@ function buildScene() {
     { n: [-1, 0, 0], c: [[0, 1, 0], [0, 0, 0], [0, 0, 1], [0, 1, 1]], shade: 0.6, side: 'side' },
   ];
   const tileUV = (t) => [(t % ATLAS_TILES) / ATLAS_TILES, Math.floor(t / ATLAS_TILES) / ATLAS_TILES];
-  const eps = 0.0008;
+  const eps = UV_EPS;
 
   function pushQuad(arr, corners, normal, tile, color, lm, blockId, uvs, tops) {
     const [u0, v0] = tileUV(tile);
@@ -514,7 +531,20 @@ export class Preview {
       off += size * 4;
     });
     gl.bindVertexArray(null);
-    return { vao, count: data.length / 16 };
+    return { vao, buf, count: data.length / 16 };
+  }
+
+  // The selected model from the Models tab, in the scene's vertex layout
+  // (16 floats per vertex, triangles). It is drawn with the Blocks shader.
+  setModel(data) {
+    if (!this.ok) return;
+    const gl = this.gl;
+    const old = this.meshes.model;
+    if (old) {
+      gl.deleteVertexArray(old.vao);
+      gl.deleteBuffer(old.buf);
+    }
+    this.meshes.model = data && data.length ? this.makeMesh(data) : null;
   }
 
   // Compiles new graph shaders. Keeps the last working ones if this fails.
@@ -679,6 +709,10 @@ export class Preview {
     gl.disable(gl.BLEND);
     gl.bindVertexArray(this.meshes.opaque.vao);
     gl.drawArrays(gl.TRIANGLES, 0, this.meshes.opaque.count);
+    if (this.meshes.model) {
+      gl.bindVertexArray(this.meshes.model.vao);
+      gl.drawArrays(gl.TRIANGLES, 0, this.meshes.model.count);
+    }
 
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
