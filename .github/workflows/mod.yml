@@ -4,10 +4,12 @@ on:
   push:
     paths:
       - 'mod/**'
+      - '!mod/screenshots/**'
       - '.github/workflows/mod.yml'
   pull_request:
     paths:
       - 'mod/**'
+      - '!mod/screenshots/**'
   workflow_dispatch:
 
 jobs:
