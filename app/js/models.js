@@ -518,11 +518,23 @@ const FILE_SAMPLES = {
   sting: { url: 'samples/sting.glb', file: 'Sting.glb', use: 'item', target: 'minecraft:netherite_sword', hold: 'sword' },
 };
 
+// Some hosts only serve web file types, so the sample may sit next to the
+// .glb as base64 text (sting.glb.b64.txt) instead.
+async function fetchSample(url) {
+  const res = await fetch(url).catch(() => null);
+  if (res?.ok && !/text\/html/.test(res.headers.get('content-type') || '')) return res.blob();
+  const txt = await fetch(`${url}.b64.txt`).catch(() => null);
+  if (!txt?.ok) return null;
+  const s = atob((await txt.text()).trim());
+  const bytes = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) bytes[i] = s.charCodeAt(i);
+  return new Blob([bytes], { type: 'model/gltf-binary' });
+}
+
 export async function addFileSample(kind) {
   const s = FILE_SAMPLES[kind];
-  const res = await fetch(s.url);
-  if (!res.ok) throw new Error(`Could not load the ${s.file} sample.`);
-  const blob = await res.blob();
+  const blob = await fetchSample(s.url);
+  if (!blob) throw new Error(`Could not load the ${s.file} sample.`);
   return importFiles([new File([blob], s.file)], { use: s.use, target: s.target, hold: s.hold });
 }
 
