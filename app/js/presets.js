@@ -1,4 +1,6 @@
-// Ready-made graphs. Each preset returns fresh { terrain, post } graphs.
+// Ready-made graphs. Each preset returns fresh { terrain, post } graphs, plus
+// an entity graph when it changes items and mobs. Presets without one get the
+// default Items & Entities graph, which looks like vanilla.
 
 import { NODE_DEFS } from './nodes.js';
 import { defaultParams } from './codegen.js';
@@ -43,6 +45,20 @@ function wavingPlants(g, out, y = 340) {
   wire(g, wind, 'out', out, 'offset');
 }
 
+function softGrade(post, sat = 1.15, vig = 0.35) {
+  const scene = add(post, 'sceneColor', 40, 60);
+  const satAmt = slider(post, 40, 190, 'SATURATION', 'Saturation', 0, 2, 0.05, sat);
+  const s = add(post, 'saturation', 320, 70);
+  const vigAmt = slider(post, 320, 230, 'VIGNETTE', 'Vignette', 0, 1, 0.05, vig);
+  const v = add(post, 'vignette', 600, 90);
+  const outp = add(post, 'postOutput', 860, 110);
+  wire(post, scene, 'rgb', s, 'c');
+  wire(post, satAmt, 'out', s, 'amt');
+  wire(post, s, 'out', v, 'c');
+  wire(post, vigAmt, 'out', v, 's');
+  wire(post, v, 'out', outp, 'color');
+}
+
 // Presets -----------------------------------------------------------------------
 
 export const PRESETS = [
@@ -57,18 +73,56 @@ export const PRESETS = [
       wavingPlants(terrain, out);
 
       const post = graph();
-      const scene = add(post, 'sceneColor', 40, 60);
-      const satAmt = slider(post, 40, 190, 'SATURATION', 'Saturation', 0, 2, 0.05, 1.15);
-      const sat = add(post, 'saturation', 320, 70);
-      const vigAmt = slider(post, 320, 230, 'VIGNETTE', 'Vignette', 0, 1, 0.05, 0.35);
-      const vig = add(post, 'vignette', 600, 90);
-      const outp = add(post, 'postOutput', 860, 110);
-      wire(post, scene, 'rgb', sat, 'c');
-      wire(post, satAmt, 'out', sat, 'amt');
-      wire(post, sat, 'out', vig, 'c');
-      wire(post, vigAmt, 'out', vig, 's');
-      wire(post, vig, 'out', outp, 'color');
+      softGrade(post);
       return { terrain, post };
+    },
+  },
+  {
+    id: 'shiny',
+    name: 'Shiny Weapons',
+    blurb: 'Swords, tools, armour and shields turn to polished metal that catches the sun and reflects the sky.',
+    build() {
+      const terrain = graph();
+      const tOut = add(terrain, 'terrainOutput', 640, 120);
+      texturedBlocks(terrain, tOut);
+      wavingPlants(terrain, tOut);
+
+      // Items & Entities: Lit lighting, and a metal mask for weapons and gear.
+      const entity = graph();
+      const out = add(entity, 'entityOutput', 1240, 80, { lighting: 'Lit' });
+      const { tex } = texturedBlocks(entity, out);
+      const swords = add(entity, 'itemMask', 40, 360, { group: 'Swords' });
+      const tools = add(entity, 'itemMask', 40, 500, { group: 'Tools' });
+      const armor = add(entity, 'itemMask', 40, 640, { group: 'Armor' });
+      const shields = add(entity, 'itemMask', 40, 780, { group: 'Shields' });
+      const m1 = add(entity, 'max', 300, 400);
+      const m2 = add(entity, 'max', 300, 560);
+      const gear = add(entity, 'max', 300, 720);
+      wire(entity, swords, 'mask', m1, 'a');
+      wire(entity, tools, 'mask', m1, 'b');
+      wire(entity, m1, 'out', m2, 'a');
+      wire(entity, armor, 'mask', m2, 'b');
+      wire(entity, m2, 'out', gear, 'a');
+      wire(entity, shields, 'mask', gear, 'b');
+      // Bright pixels are the metal blade; dark ones are the wooden handle.
+      const gray = add(entity, 'grayscale', 560, 240);
+      const bright = add(entity, 'smoothstep', 560, 400, {}, { e0: 0.35, e1: 0.7 });
+      wire(entity, tex, 'rgb', gray, 'c');
+      wire(entity, gray, 'luma', bright, 'x');
+      const metal = add(entity, 'multiply', 820, 420);
+      wire(entity, gear, 'out', metal, 'a');
+      wire(entity, bright, 'out', metal, 'b');
+      const shineAmt = slider(entity, 820, 580, 'WEAPON_SHINE', 'Weapon Shine', 0, 1, 0.05, 0.9);
+      const smooth = add(entity, 'multiply', 1040, 500);
+      wire(entity, metal, 'out', smooth, 'a');
+      wire(entity, shineAmt, 'out', smooth, 'b');
+      wire(entity, smooth, 'out', out, 'smooth');
+      wire(entity, metal, 'out', out, 'metal');
+      add(entity, 'note', 560, 640, { text: 'Item ID Mask reads item.properties, so it works on held, dropped and framed items and on worn armour. Lighting is Lit on the output, so Smoothness and Metallic catch the sun and reflect the sky.' });
+
+      const post = graph();
+      softGrade(post, 1.1, 0.3);
+      return { terrain, entity, post };
     },
   },
   {
@@ -356,19 +410,25 @@ export const PRESETS = [
       const outp = add(post, 'postOutput', 560, 80);
       wire(post, scene, 'rgb', wb, 'c');
       wire(post, wb, 'out', outp, 'color');
-      return { terrain, post };
+
+      const entity = graph();
+      const eOut = add(entity, 'entityOutput', 640, 100, { lighting: 'Lit' });
+      texturedBlocks(entity, eOut);
+      return { terrain, entity, post };
     },
   },
   {
     id: 'vanilla',
     name: 'Blank (vanilla look)',
-    blurb: 'Just the two output nodes. Start from scratch.',
+    blurb: 'Just the output nodes. Start from scratch.',
     build() {
       const terrain = graph();
       add(terrain, 'terrainOutput', 360, 120);
+      const entity = graph();
+      add(entity, 'entityOutput', 360, 120);
       const post = graph();
       add(post, 'postOutput', 360, 100);
-      return { terrain, post };
+      return { terrain, entity, post };
     },
   },
 ];

@@ -455,8 +455,10 @@ function updateStage() {
     : g === 'shield' ? 'Blue box: one block. Gold outline: the vanilla shield plate.' : 'Blue box: one block.';
 }
 
-// Shows the selected model in the live preview, on the grass, drawn with the
-// Blocks shader like any block (Block Type → Custom Models is 1 on it).
+// Shows the selected model in the live preview, the way the game draws it: a
+// block model stands on the grass under the Blocks shader (Block Type →
+// Custom Models is 1 on it); an item model is held in first person under the
+// Items & Entities shader, in place of the sample sword (or shield).
 function updatePreview() {
   const preview = ctx.preview;
   if (!preview?.ok) return;
@@ -464,6 +466,7 @@ function updatePreview() {
   const pm = m && placedMesh(m);
   if (!pm) {
     preview.setModel(null);
+    preview.setHeldModel?.(null);
     for (const t of shownTiles) preview.setTileOverride(t, null);
     shownTiles.clear();
     return;
@@ -490,8 +493,10 @@ function updatePreview() {
   shownTiles.clear();
   for (const t of used) shownTiles.add(t);
 
+  const held = m.use !== 'block' && !!preview.setHeldModel;
+  const at = held ? [-0.5, -0.5, -0.5] : MODEL_SPOT;
   const centre = [MODEL_SPOT[0] + 0.5, MODEL_SPOT[1] + 0.5, MODEL_SPOT[2] + 0.5];
-  const [blockLight, sky] = sceneLight(...centre);
+  const [blockLight, sky] = held ? [0, 1] : sceneLight(...centre);
   const tris = pm.mat.length;
   const data = new Float32Array(tris * 3 * 16);
   let o = 0;
@@ -515,15 +520,21 @@ function updatePreview() {
       const shade = Math.min(n[0] * n[0] * 0.6 + n[1] * n[1] * (n[1] > 0 ? 1 : 0.5) + n[2] * n[2] * 0.8, 1);
       const uv = atlasUV(tile, pm.uv ? pm.uv[i * 2] : 0.5, pm.uv ? pm.uv[i * 2 + 1] : 0.5);
       data.set([
-        pm.pos[i * 3] + MODEL_SPOT[0], pm.pos[i * 3 + 1] + MODEL_SPOT[1], pm.pos[i * 3 + 2] + MODEL_SPOT[2],
+        pm.pos[i * 3] + at[0], pm.pos[i * 3 + 1] + at[1], pm.pos[i * 3 + 2] + at[2],
         n[0], n[1], n[2], uv[0], uv[1],
         tint[0] * shade, tint[1] * shade, tint[2] * shade, 1,
-        mat.glow ? 1 : blockLight, sky, 4, 0,
+        mat.glow ? 1 : blockLight, sky, held ? 0 : 4, 0,
       ], o);
       o += 16;
     }
   }
-  preview.setModel(data);
+  if (held) {
+    preview.setModel(null);
+    preview.setHeldModel(data, m.hold === 'shield' ? 'off' : 'main');
+  } else {
+    preview.setHeldModel?.(null);
+    preview.setModel(data);
+  }
 }
 
 export function refreshViews() {
@@ -948,7 +959,7 @@ function renderProps() {
   }
 
   if (m.use !== 'block') {
-    box.append(el('p', 'field-hint', 'In game, items in hand and on the ground are drawn by the shader pack’s hand and entity programs, which BlockGraph keeps vanilla-style for now. The Blocks graph runs on models used as blocks (Block Type → Custom Models).'));
+    box.append(el('p', 'field-hint', 'In game, items in hand, on the ground and in item displays are drawn with your Items & Entities graph, so the live preview shows this model in your hand with it. Models used as blocks get the Blocks graph instead (Block Type \u2192 Custom Models).'));
   }
 
   const acts = el('div', 'tex-row');
