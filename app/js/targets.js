@@ -1,0 +1,642 @@
+// Wraps compiled graph code into complete shaders for two targets:
+//  - "preview": WebGL2 (GLSL ES 3.00) for the live preview in the browser
+//  - "iris":    an Iris / OptiFine-format shader pack (GLSL 330 compatibility)
+
+import { compileStage, collectSettings } from './codegen.js';
+import { GLSL_HELPERS } from './nodes.js';
+
+export const BLOCK_IDS = { leaves: 10001, plants: 10002, water: 10003 };
+
+// ------------------------------------------------------------------ settings
+
+function decimalsOf(n) {
+  const s = String(n);
+  const i = s.indexOf('.');
+  return i < 0 ? 0 : Math.min(4, s.length - i - 1);
+}
+
+export function sliderValues(s) {
+  let min = Number(s.min), max = Number(s.max), step = Math.abs(Number(s.step)) || 0.1;
+  if (!Number.isFinite(min)) min = 0;
+  if (!Number.isFinite(max)) max = 1;
+  if (max < min) [min, max] = [max, min];
+  let count = Math.floor((max - min) / step + 1e-6) + 1;
+  if (count > 101) {
+    step *= Math.ceil(count / 101);
+    count = Math.floor((max - min) / step + 1e-6) + 1;
+  }
+  const dec = Math.max(1, decimalsOf(step), decimalsOf(min));
+  const vals = [];
+  for (let i = 0; i < count; i++) vals.push(Number((min + i * step).toFixed(dec)));
+  const v = Number(Number(s.value).toFixed(dec));
+  if (Number.isFinite(v) && !vals.includes(v)) {
+    vals.push(v);
+    vals.sort((a, b) => a - b);
+  }
+  return { vals, dec, value: Number.isFinite(v) ? v : vals[0] };
+}
+
+function irisSettingDefines(settings) {
+  const out = [];
+  for (const [name, s] of settings) {
+    if (s.kind === 'slider') {
+      const { vals, dec, value } = sliderValues(s);
+      out.push(`#define ${name} ${value.toFixed(dec)} // [${vals.map((x) => x.toFixed(dec)).join(' ')}]`);
+    } else {
+      out.push(`${s.value ? '' : '//'}#define ${name}`);
+      out.push(`#ifdef ${name}`, `const float TG_${name} = 1.0;`, '#else', `const float TG_${name} = 0.0;`, '#endif');
+    }
+  }
+  return out.join('\n');
+}
+
+function previewSettingUniforms(settings) {
+  return [...settings]
+    .map(([name, s]) => `uniform float ${s.kind === 'toggle' ? 'TG_' + name : name};`)
+    .join('\n');
+}
+
+const indent = (lines, pad = '\t') => lines.join('\n').split('\n').map((l) => (l ? pad + l : l)).join('\n');
+
+// ------------------------------------------------------------- compile both
+
+export function compileAll(graphs) {
+  const t = graphs.terrain;
+  const p = graphs.post;
+  const tFrag = compileStage(t, 'terrain', 'fragment');
+  const tVert = compileStage(t, 'terrain', 'vertex');
+  const post = compileStage(p, 'post', 'fragment');
+  const { settings, problems } = collectSettings(graphs);
+  const errors = [
+    ...tFrag.errors.map((e) => ({ ...e, graph: 'terrain' })),
+    ...tVert.errors.map((e) => ({ ...e, graph: 'terrain' })),
+    ...post.errors.map((e) => ({ ...e, graph: 'post' })),
+    ...problems.map((e) => ({ ...e, graph: null })),
+  ];
+  // de-duplicate identical messages
+  const seen = new Set();
+  const uniqErrors = errors.filter((e) => {
+    const k = `${e.graph}:${e.node}:${e.msg}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+  return { tFrag, tVert, post, settings, errors: uniqErrors };
+}
+
+// ------------------------------------------------------------------ preview
+
+const PREVIEW_LIGHT = `
+vec3 bg_lightmapColor(vec2 lm, float daylight) {
+  float sky = lm.y * lm.y;
+  float blk = lm.x * lm.x;
+  vec3 skyCol = mix(vec3(0.09, 0.10, 0.19), vec3(1.0, 1.0, 0.97), daylight) * sky;
+  vec3 blkCol = vec3(1.0, 0.8, 0.55) * blk * 1.15;
+  return clamp(max(skyCol, blkCol) + vec3(0.035), 0.0, 1.0);
+}
+`;
+
+function terrainBuiltinsPreview(stage) {
+  const v = stage === 'vertex';
+  return [
+    `vec2 bg_uv = ${v ? 'a_uv' : 'v_uv'};`,
+    'float bg_time = u_time;',
+    'float bg_dayTime = u_dayTime;',
+    'float bg_daylight = smoothstep(-0.1, 0.25, sin(bg_dayTime * 6.2831853));',
+    'float bg_rain = u_rain;',
+    `vec3 bg_worldPos = ${v ? 'a_pos' : 'v_world'};`,
+    `vec3 bg_normal = normalize(${v ? 'a_normal' : 'v_normal'});`,
+    `vec4 bg_vcolor = ${v ? 'a_color' : 'v_color'};`,
+    `vec2 bg_lm = ${v ? 'a_lm' : 'v_lm'};`,
+    'vec3 bg_light = bg_lightmapColor(bg_lm, bg_daylight);',
+    `float bg_blockId = ${v ? 'a_block' : 'v_block'};`,
+    'float bg_isLeaves = abs(bg_blockId - 1.0) < 0.5 ? 1.0 : 0.0;',
+    'float bg_isPlant = abs(bg_blockId - 2.0) < 0.5 ? 1.0 : 0.0;',
+    'float bg_isWater = abs(bg_blockId - 3.0) < 0.5 ? 1.0 : 0.0;',
+    `float bg_plantTop = ${v ? 'a_top' : 'v_top'};`,
+    `float bg_viewDist = ${v ? 'length(a_pos - u_cam)' : 'v_dist'};`,
+    'vec3 bg_viewDir = normalize(u_cam - bg_worldPos);',
+  ].join('\n');
+}
+
+function postBuiltins(target) {
+  const pv = target === 'preview';
+  return [
+    `vec2 bg_screenUV = ${pv ? 'v_uv' : 'texcoord'};`,
+    `float bg_time = ${pv ? 'u_time' : 'frameTimeCounter'};`,
+    `float bg_dayTime = ${pv ? 'u_dayTime' : 'float(worldTime) / 24000.0'};`,
+    'float bg_daylight = smoothstep(-0.1, 0.25, sin(bg_dayTime * 6.2831853));',
+    `float bg_rain = ${pv ? 'u_rain' : 'rainStrength'};`,
+    `vec2 bg_resolution = ${pv ? 'u_res' : 'vec2(viewWidth, viewHeight)'};`,
+    'float bg_aspect = bg_resolution.x / bg_resolution.y;',
+  ].join('\n');
+}
+
+export function buildPreview(graphs) {
+  const c = compileAll(graphs);
+  const settingUniforms = previewSettingUniforms(c.settings);
+  const o = c.tFrag.outputs;
+  const fog = c.tFrag.outParams.fog !== false;
+
+  const terrainVS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec3 a_pos;
+in vec3 a_normal;
+in vec2 a_uv;
+in vec4 a_color;
+in vec2 a_lm;
+in float a_block;
+in float a_top;
+uniform mat4 u_viewProj;
+uniform vec3 u_cam;
+uniform float u_time;
+uniform float u_dayTime;
+uniform float u_rain;
+${settingUniforms}
+out vec2 v_uv;
+out vec2 v_lm;
+out vec4 v_color;
+out vec3 v_world;
+out vec3 v_normal;
+out float v_dist;
+flat out float v_block;
+out float v_top;
+${GLSL_HELPERS}
+${PREVIEW_LIGHT}
+void main() {
+${indent([terrainBuiltinsPreview('vertex')], '  ')}
+${indent(c.tVert.lines.length ? c.tVert.lines : ['// (no vertex nodes)'], '  ')}
+  vec3 bg_offset = ${c.tVert.outputs.offset || 'vec3(0.0)'};
+  vec3 wp = a_pos + bg_offset;
+  v_uv = a_uv;
+  v_lm = a_lm;
+  v_color = a_color;
+  v_world = wp;
+  v_normal = a_normal;
+  v_dist = length(wp - u_cam);
+  v_block = a_block;
+  v_top = a_top;
+  gl_Position = u_viewProj * vec4(wp, 1.0);
+}
+`;
+
+  const terrainFS = `#version 300 es
+precision highp float;
+precision highp int;
+uniform sampler2D u_atlas;
+uniform vec3 u_cam;
+uniform vec3 u_fogColor;
+uniform float u_far;
+uniform float u_time;
+uniform float u_dayTime;
+uniform float u_rain;
+${settingUniforms}
+in vec2 v_uv;
+in vec2 v_lm;
+in vec4 v_color;
+in vec3 v_world;
+in vec3 v_normal;
+in float v_dist;
+flat in float v_block;
+in float v_top;
+out vec4 fragColor;
+${GLSL_HELPERS}
+${PREVIEW_LIGHT}
+vec4 bg_sampleBlock(vec2 uv) { return texture(u_atlas, uv); }
+void main() {
+${indent([terrainBuiltinsPreview('fragment')], '  ')}
+${indent(c.tFrag.lines.length ? c.tFrag.lines : ['// (no nodes)'], '  ')}
+  vec3 bg_col = ${o.color};
+  float bg_alpha = ${o.alpha};
+  vec3 bg_lit = ${o.light};
+  float bg_emit = ${o.emission};
+  if (bg_alpha < 0.1) discard;
+  vec3 rgb = bg_col * bg_lit + bg_col * bg_emit;
+${fog ? '  rgb = mix(rgb, u_fogColor, clamp((bg_viewDist - u_far * 0.75) / (u_far * 0.25), 0.0, 1.0));' : ''}
+  fragColor = vec4(rgb, bg_alpha);
+}
+`;
+
+  const postFS = `#version 300 es
+precision highp float;
+precision highp int;
+uniform sampler2D u_scene;
+uniform sampler2D u_depth;
+uniform mat4 u_projInv;
+uniform vec2 u_res;
+uniform float u_time;
+uniform float u_dayTime;
+uniform float u_rain;
+${settingUniforms}
+in vec2 v_uv;
+out vec4 fragColor;
+${GLSL_HELPERS}
+vec4 bg_sampleScene(vec2 uv) { return texture(u_scene, uv); }
+float bg_sceneDistance(vec2 uv) {
+  float d = texture(u_depth, uv).r;
+  vec4 v = u_projInv * vec4(vec3(uv, d) * 2.0 - 1.0, 1.0);
+  return length(v.xyz / v.w);
+}
+float bg_isSky(vec2 uv) { return texture(u_depth, uv).r >= 0.99999 ? 1.0 : 0.0; }
+void main() {
+${indent([postBuiltins('preview')], '  ')}
+${indent(c.post.lines.length ? c.post.lines : ['// (no nodes)'], '  ')}
+  fragColor = vec4(clamp(${c.post.outputs.color}, 0.0, 1.0), 1.0);
+}
+`;
+
+  return { terrainVS, terrainFS, postFS, settings: c.settings, errors: c.errors };
+}
+
+// --------------------------------------------------------------------- iris
+
+const HEADER = (what) => `#version 330 compatibility
+// ${what}
+// Generated by BlockGraph (node shader editor) for Iris on Minecraft 1.21.11.
+`;
+
+function terrainBuiltinsIris(stage) {
+  const v = stage === 'vertex';
+  return [
+    'vec2 bg_uv = texcoord;',
+    'float bg_time = frameTimeCounter;',
+    'float bg_dayTime = float(worldTime) / 24000.0;',
+    'float bg_daylight = smoothstep(-0.1, 0.25, sin(bg_dayTime * 6.2831853));',
+    'float bg_rain = rainStrength;',
+    `vec3 bg_worldPos = ${v ? 'wPos' : 'worldPos'};`,
+    `vec3 bg_normal = normalize(${v ? 'wNormal' : 'worldNormal'});`,
+    'vec4 bg_vcolor = glcolor;',
+    'vec2 bg_lm = clamp((lmcoord - 0.03125) * 1.06667, 0.0, 1.0);',
+    `vec3 bg_light = ${v ? 'textureLod(lightmap, lmcoord, 0.0).rgb' : 'texture(lightmap, lmcoord).rgb'};`,
+    `int bg_id = ${v ? 'id' : 'blockId'};`,
+    `float bg_isLeaves = bg_id == ${BLOCK_IDS.leaves} ? 1.0 : 0.0;`,
+    `float bg_isPlant = bg_id == ${BLOCK_IDS.plants} ? 1.0 : 0.0;`,
+    `float bg_isWater = bg_id == ${BLOCK_IDS.water} ? 1.0 : 0.0;`,
+    `float bg_plantTop = ${v ? 'top' : 'plantTop'};`,
+    `float bg_viewDist = ${v ? 'length(playerPos.xyz)' : 'viewDist'};`,
+    'vec3 bg_viewDir = normalize(cameraPosition - bg_worldPos);',
+  ].join('\n');
+}
+
+function settingsUsedIn(stageResult, all) {
+  const m = new Map();
+  for (const name of stageResult.settings.keys()) if (all.has(name)) m.set(name, all.get(name));
+  return m;
+}
+
+function irisTerrain(c, programName) {
+  const vSet = settingsUsedIn(c.tVert, c.settings);
+  const fSet = settingsUsedIn(c.tFrag, c.settings);
+  const o = c.tFrag.outputs;
+  const fog = c.tFrag.outParams.fog !== false;
+
+  const vsh = `${HEADER(`${programName}.vsh: Blocks graph, vertex stage (Vertex Offset)`)}
+${irisSettingDefines(vSet)}
+
+uniform mat4 gbufferModelView;
+uniform mat4 gbufferModelViewInverse;
+uniform vec3 cameraPosition;
+uniform float frameTimeCounter;
+uniform int worldTime;
+uniform float rainStrength;
+uniform sampler2D lightmap;
+
+in vec4 mc_Entity;
+in vec2 mc_midTexCoord;
+
+out vec2 texcoord;
+out vec2 lmcoord;
+out vec4 glcolor;
+out vec3 worldPos;
+out vec3 worldNormal;
+out float viewDist;
+out float plantTop;
+flat out int blockId;
+${GLSL_HELPERS}
+void main() {
+	texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+	lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
+	glcolor = gl_Color;
+	int id = int(mc_Entity.x + 0.5);
+	float top = gl_MultiTexCoord0.y < mc_midTexCoord.y ? 1.0 : 0.0;
+	blockId = id;
+	plantTop = top;
+
+	vec4 playerPos = gbufferModelViewInverse * (gl_ModelViewMatrix * gl_Vertex);
+	vec3 wPos = playerPos.xyz + cameraPosition;
+	vec3 wNormal = normalize(mat3(gbufferModelViewInverse) * normalize(gl_NormalMatrix * gl_Normal));
+
+${indent([terrainBuiltinsIris('vertex')])}
+
+${indent(c.tVert.lines.length ? c.tVert.lines : ['// (nothing is wired into Vertex Offset)'])}
+	vec3 bg_offset = ${c.tVert.outputs.offset || 'vec3(0.0)'};
+
+	playerPos.xyz += bg_offset;
+	worldPos = wPos + bg_offset;
+	worldNormal = wNormal;
+	viewDist = length(playerPos.xyz);
+	gl_Position = gl_ProjectionMatrix * (gbufferModelView * playerPos);
+}
+`;
+
+  const fsh = `${HEADER(`${programName}.fsh: Blocks graph, pixel stage`)}
+${irisSettingDefines(fSet)}
+
+uniform sampler2D gtexture;
+uniform sampler2D lightmap;
+uniform vec3 cameraPosition;
+uniform vec3 fogColor;
+uniform float far;
+uniform float frameTimeCounter;
+uniform int worldTime;
+uniform float rainStrength;
+uniform float alphaTestRef = 0.1;
+
+in vec2 texcoord;
+in vec2 lmcoord;
+in vec4 glcolor;
+in vec3 worldPos;
+in vec3 worldNormal;
+in float viewDist;
+in float plantTop;
+flat in int blockId;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 outColor0;
+${GLSL_HELPERS}
+vec4 bg_sampleBlock(vec2 uv) { return texture(gtexture, uv); }
+
+void main() {
+${indent([terrainBuiltinsIris('fragment')])}
+
+${indent(c.tFrag.lines.length ? c.tFrag.lines : ['// (no nodes)'])}
+	vec3 bg_col = ${o.color};
+	float bg_alpha = ${o.alpha};
+	vec3 bg_lit = ${o.light};
+	float bg_emit = ${o.emission};
+
+	if (bg_alpha < alphaTestRef) discard;
+	vec3 rgb = bg_col * bg_lit + bg_col * bg_emit;
+${fog ? '\trgb = mix(rgb, fogColor, clamp((viewDist - far * 0.75) / (far * 0.25), 0.0, 1.0));' : '\t// Vanilla distance fog is turned off on the Block Output node.'}
+	outColor0 = vec4(rgb, bg_alpha);
+}
+`;
+  return { vsh, fsh };
+}
+
+function irisComposite(c) {
+  const set = settingsUsedIn(c.post, c.settings);
+  const vsh = `${HEADER('composite.vsh: full-screen pass for the Post FX graph')}
+out vec2 texcoord;
+
+void main() {
+	gl_Position = ftransform();
+	texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+}
+`;
+  const fsh = `${HEADER('composite.fsh: Post FX graph')}
+${irisSettingDefines(set)}
+
+uniform sampler2D colortex0;
+uniform sampler2D depthtex0;
+uniform mat4 gbufferProjectionInverse;
+uniform float viewWidth;
+uniform float viewHeight;
+uniform float frameTimeCounter;
+uniform int worldTime;
+uniform float rainStrength;
+
+in vec2 texcoord;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 outColor0;
+${GLSL_HELPERS}
+vec4 bg_sampleScene(vec2 uv) { return texture(colortex0, uv); }
+float bg_sceneDistance(vec2 uv) {
+	float d = texture(depthtex0, uv).r;
+	vec4 v = gbufferProjectionInverse * vec4(vec3(uv, d) * 2.0 - 1.0, 1.0);
+	return length(v.xyz / v.w);
+}
+float bg_isSky(vec2 uv) { return texture(depthtex0, uv).r >= 0.99999 ? 1.0 : 0.0; }
+
+void main() {
+${indent([postBuiltins('iris')])}
+
+${indent(c.post.lines.length ? c.post.lines : ['// (no nodes)'])}
+	outColor0 = vec4(clamp(${c.post.outputs.color}, 0.0, 1.0), 1.0);
+}
+`;
+  return { vsh, fsh };
+}
+
+// Programs the graphs don't cover. Kept close to vanilla so entities, the sky,
+// particles and the hand look normal.
+const STATIC_PROGRAMS = {
+  'gbuffers_basic.vsh': `${HEADER('gbuffers_basic.vsh: lines and untextured geometry')}
+out vec2 lmcoord;
+out vec4 glcolor;
+
+void main() {
+	gl_Position = ftransform();
+	lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
+	glcolor = gl_Color;
+}
+`,
+  'gbuffers_basic.fsh': `${HEADER('gbuffers_basic.fsh')}
+uniform sampler2D lightmap;
+uniform float alphaTestRef = 0.1;
+
+in vec2 lmcoord;
+in vec4 glcolor;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 color;
+
+void main() {
+	color = glcolor * texture(lightmap, lmcoord);
+	if (color.a < alphaTestRef) discard;
+}
+`,
+  'gbuffers_textured.vsh': `${HEADER('gbuffers_textured.vsh: entities, particles, the hand and other textured things')}
+out vec2 lmcoord;
+out vec2 texcoord;
+out vec4 glcolor;
+
+void main() {
+	gl_Position = ftransform();
+	texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+	lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
+	glcolor = gl_Color;
+}
+`,
+  'gbuffers_textured.fsh': `${HEADER('gbuffers_textured.fsh')}
+uniform sampler2D gtexture;
+uniform sampler2D lightmap;
+uniform vec4 entityColor;
+uniform float alphaTestRef = 0.1;
+
+in vec2 lmcoord;
+in vec2 texcoord;
+in vec4 glcolor;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 color;
+
+void main() {
+	color = texture(gtexture, texcoord) * glcolor;
+	color.rgb = mix(color.rgb, entityColor.rgb, entityColor.a);
+	color *= texture(lightmap, lmcoord);
+	if (color.a < alphaTestRef) discard;
+}
+`,
+  'gbuffers_clouds.vsh': `${HEADER('gbuffers_clouds.vsh')}
+out vec2 texcoord;
+out vec4 glcolor;
+
+void main() {
+	gl_Position = ftransform();
+	texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+	glcolor = gl_Color;
+}
+`,
+  'gbuffers_clouds.fsh': `${HEADER('gbuffers_clouds.fsh')}
+uniform sampler2D gtexture;
+uniform float alphaTestRef = 0.1;
+
+in vec2 texcoord;
+in vec4 glcolor;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 color;
+
+void main() {
+	color = texture(gtexture, texcoord) * glcolor;
+	if (color.a < alphaTestRef) discard;
+}
+`,
+  'gbuffers_skybasic.vsh': `${HEADER('gbuffers_skybasic.vsh: sky colour and stars')}
+out vec4 starData;
+
+void main() {
+	gl_Position = ftransform();
+	starData = vec4(gl_Color.rgb, float(gl_Color.r == gl_Color.g && gl_Color.g == gl_Color.b && gl_Color.r > 0.0));
+}
+`,
+  'gbuffers_skybasic.fsh': `${HEADER('gbuffers_skybasic.fsh')}
+uniform int renderStage;
+uniform float viewHeight;
+uniform float viewWidth;
+uniform mat4 gbufferModelView;
+uniform mat4 gbufferProjectionInverse;
+uniform vec3 fogColor;
+uniform vec3 skyColor;
+
+in vec4 starData;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 color;
+
+float fogify(float x, float w) {
+	return w / (x * x + w);
+}
+
+vec3 calcSkyColor(vec3 pos) {
+	float upDot = dot(pos, gbufferModelView[1].xyz);
+	return mix(skyColor, fogColor, fogify(max(upDot, 0.0), 0.25));
+}
+
+void main() {
+	if (renderStage == MC_RENDER_STAGE_STARS) {
+		color = starData;
+	} else {
+		vec4 pos = vec4(gl_FragCoord.xy / vec2(viewWidth, viewHeight) * 2.0 - 1.0, 1.0, 1.0);
+		pos = gbufferProjectionInverse * pos;
+		color = vec4(calcSkyColor(normalize(pos.xyz)), 1.0);
+	}
+}
+`,
+  'gbuffers_skytextured.vsh': `${HEADER('gbuffers_skytextured.vsh: sun and moon')}
+out vec2 texcoord;
+out vec4 glcolor;
+
+void main() {
+	gl_Position = ftransform();
+	texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+	glcolor = gl_Color;
+}
+`,
+  'gbuffers_skytextured.fsh': `${HEADER('gbuffers_skytextured.fsh')}
+uniform sampler2D gtexture;
+
+in vec2 texcoord;
+in vec4 glcolor;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 color;
+
+void main() {
+	color = texture(gtexture, texcoord) * glcolor;
+}
+`,
+};
+
+const LEAVES = [
+  'oak_leaves', 'spruce_leaves', 'birch_leaves', 'jungle_leaves', 'acacia_leaves', 'dark_oak_leaves',
+  'mangrove_leaves', 'cherry_leaves', 'azalea_leaves', 'flowering_azalea_leaves', 'pale_oak_leaves', 'vine',
+];
+const PLANTS = [
+  'short_grass', 'tall_grass', 'fern', 'large_fern', 'dead_bush', 'dandelion', 'poppy', 'blue_orchid', 'allium',
+  'azure_bluet', 'red_tulip', 'orange_tulip', 'white_tulip', 'pink_tulip', 'oxeye_daisy', 'cornflower',
+  'lily_of_the_valley', 'torchflower', 'sunflower', 'lilac', 'rose_bush', 'peony', 'wheat', 'carrots', 'potatoes',
+  'beetroots', 'sweet_berry_bush', 'sugar_cane', 'oak_sapling', 'spruce_sapling', 'birch_sapling', 'jungle_sapling',
+  'acacia_sapling', 'dark_oak_sapling', 'cherry_sapling', 'pale_oak_sapling', 'short_dry_grass', 'tall_dry_grass',
+  'bush', 'firefly_bush',
+];
+
+export function buildIris(graphs, opts = {}) {
+  const c = compileAll(graphs);
+  const terrain = irisTerrain(c, 'gbuffers_terrain');
+  const water = irisTerrain(c, 'gbuffers_water');
+  const comp = irisComposite(c);
+  const files = {};
+  files['shaders/gbuffers_terrain.vsh'] = terrain.vsh;
+  files['shaders/gbuffers_terrain.fsh'] = terrain.fsh;
+  files['shaders/gbuffers_water.vsh'] = water.vsh;
+  files['shaders/gbuffers_water.fsh'] = water.fsh;
+  files['shaders/composite.vsh'] = comp.vsh;
+  files['shaders/composite.fsh'] = comp.fsh;
+  for (const [name, src] of Object.entries(STATIC_PROGRAMS)) files['shaders/' + name] = src;
+
+  files['shaders/block.properties'] = [
+    '# Block IDs used by the Block Type node (read in the shader through mc_Entity).',
+    `block.${BLOCK_IDS.leaves}=${LEAVES.join(' ')}`,
+    `block.${BLOCK_IDS.plants}=${PLANTS.join(' ')}`,
+    `block.${BLOCK_IDS.water}=water`,
+    '',
+  ].join('\n');
+
+  const names = [...c.settings.keys()];
+  const sliders = names.filter((n) => c.settings.get(n).kind === 'slider');
+  const props = [
+    `# ${opts.name || 'BlockGraph pack'}, made with BlockGraph.`,
+    '# Keep vanilla per-face shading so blocks read as 3D.',
+    'oldLighting = true',
+  ];
+  if (names.length) {
+    props.push('', '# Settings menu (Iris → Shader Settings). Built from your Slider and On/Off nodes.');
+    props.push(`screen = ${names.join(' ')}`);
+    if (sliders.length) props.push(`sliders = ${sliders.join(' ')}`);
+  }
+  files['shaders/shaders.properties'] = props.join('\n') + '\n';
+
+  const lang = [`# Labels for the settings menu`];
+  for (const n of names) {
+    const s = c.settings.get(n);
+    lang.push(`option.${n}=${(s.label || n).replace(/\n/g, ' ')}`);
+    if (s.kind === 'slider') lang.push(`option.${n}.comment=Range ${s.min} to ${s.max}. Made with BlockGraph.`);
+  }
+  files['shaders/lang/en_us.lang'] = lang.join('\n') + '\n';
+  for (const k of Object.keys(files)) files[k] = files[k].replace(/\n{3,}/g, '\n\n');
+  return { files, errors: c.errors, settings: c.settings };
+}

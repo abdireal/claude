@@ -1,0 +1,144 @@
+<title>BlockGraph</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Pixelify+Sans:wght@500;600;700&display=swap">
+<link rel="stylesheet" href="css/style.css">
+
+<div class="app" data-mobile="graph">
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 16 16" aria-hidden="true">
+        <path class="logo-top" d="M8 1 15 4.5 8 8 1 4.5Z"/>
+        <path class="logo-left" d="M1 4.5 8 8v7L1 11.5Z"/>
+        <path class="logo-right" d="M15 4.5 8 8v7l7-3.5Z"/>
+        <circle class="logo-node" cx="8" cy="8" r="1.6"/>
+      </svg>
+      <span class="wordmark">BlockGraph</span>
+      <span class="target-chip" title="Exports packs for Iris on Minecraft 1.21.11 with Fabric">Iris · 1.21.11 · Fabric</span>
+    </div>
+
+    <div class="graph-tabs" role="tablist" aria-label="Graph">
+      <button class="graph-tab" role="tab" type="button" data-kind="terrain" id="tab-terrain">
+        <span class="tab-name">Blocks</span><span class="tab-badge" hidden></span>
+      </button>
+      <button class="graph-tab" role="tab" type="button" data-kind="post" id="tab-post">
+        <span class="tab-name">Post FX</span><span class="tab-badge" hidden></span>
+      </button>
+    </div>
+
+    <div class="top-actions">
+      <div class="menu-wrap">
+        <button id="btn-presets" class="btn ghost" type="button" aria-haspopup="menu" aria-expanded="false">Presets
+          <svg class="chev" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4"/></svg>
+        </button>
+        <div class="menu" id="menu-presets" role="menu" hidden></div>
+      </div>
+      <div class="btn-group" role="group" aria-label="History">
+        <button id="btn-undo" class="btn icon" type="button" title="Undo (Ctrl+Z)" aria-label="Undo">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3 2 6l3 3M2.5 6H10a4 4 0 0 1 0 8H7"/></svg>
+        </button>
+        <button id="btn-redo" class="btn icon" type="button" title="Redo (Ctrl+Shift+Z)" aria-label="Redo">
+          <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11 3l3 3-3 3M13.5 6H6a4 4 0 0 0 0 8h3"/></svg>
+        </button>
+      </div>
+      <button id="btn-why" class="btn ghost hide-sm" type="button">Why nodes?</button>
+      <button id="btn-code" class="btn ghost" type="button">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4 2 8l3.5 4M10.5 4 14 8l-3.5 4"/></svg>
+        <span class="hide-sm">View code</span>
+      </button>
+      <button id="btn-export" class="btn primary" type="button">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8m-3.5-3.5L8 10l3.5-3.5M3 13h10"/></svg>
+        Export pack
+      </button>
+    </div>
+
+    <div class="mobile-switch" role="tablist" aria-label="Panel">
+      <button class="mobile-tab" type="button" role="tab" data-mode="nodes">Nodes</button>
+      <button class="mobile-tab active" type="button" role="tab" data-mode="graph" aria-selected="true">Graph</button>
+      <button class="mobile-tab" type="button" role="tab" data-mode="preview">Preview</button>
+    </div>
+  </header>
+
+  <aside class="library" aria-label="Node library">
+    <div class="lib-search">
+      <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+      <input id="lib-search" type="search" placeholder="Search nodes" autocomplete="off" aria-label="Search nodes">
+    </div>
+    <div class="lib-list" id="lib-list"></div>
+    <p class="lib-foot">Drag a node onto the canvas, or click it to drop it in the middle.</p>
+  </aside>
+
+  <main class="stage">
+    <div class="canvas" id="canvas" tabindex="0" aria-label="Node graph canvas"></div>
+    <div class="hud-top">
+      <p class="graph-caption" id="graph-caption"></p>
+      <div class="zoom-ctl" role="group" aria-label="Zoom">
+        <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
+        <button id="zoom-fit" type="button">Fit</button>
+        <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+      </div>
+    </div>
+    <div class="welcome" id="welcome" hidden>
+      <p class="welcome-eyebrow">Sample graph loaded</p>
+      <h2>Leaves and grass sway in the wind</h2>
+      <p>Block Type finds the plants, Wind Sway makes the motion, and a Slider Setting becomes an option in Iris. Spin the preview to see it move.</p>
+      <div class="welcome-actions">
+        <button class="btn primary small" id="welcome-why" type="button">Why nodes?</button>
+        <button class="btn ghost small" id="welcome-close" type="button">Got it</button>
+      </div>
+    </div>
+    <p class="hint-bar"><span>Drag from a dot to wire</span><span>Right-click or Space to add</span><span>Shift-drag to select</span><span>Del to delete</span></p>
+  </main>
+
+  <aside class="side" aria-label="Preview and inspector">
+    <section class="preview-card" aria-label="Live preview">
+      <div class="preview-head">
+        <h2>Live preview</h2>
+        <div class="preview-toggles">
+          <label class="ctl-switch small"><input type="checkbox" id="pv-post" checked><span class="switch"></span><span>Post FX</span></label>
+          <label class="ctl-switch small"><input type="checkbox" id="pv-spin"><span class="switch"></span><span>Spin</span></label>
+          <button class="btn icon small" id="pv-reset" type="button" title="Reset camera" aria-label="Reset camera">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8a5 5 0 1 0 1.5-3.5M3 2.5V5h2.5"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="preview-wrap">
+        <canvas id="preview" aria-label="3D preview of blocks with your shader. Drag to orbit, scroll to zoom."></canvas>
+        <p class="preview-msg" id="preview-msg" hidden></p>
+      </div>
+      <div class="preview-controls">
+        <label class="pv-row" for="pv-time"><span>Time</span><input type="range" id="pv-time" min="0" max="1" step="0.005" value="0.15"><output id="pv-time-out" for="pv-time"></output></label>
+        <label class="pv-row" for="pv-rain"><span>Rain</span><input type="range" id="pv-rain" min="0" max="1" step="0.01" value="0"><output id="pv-rain-out" for="pv-rain">0%</output></label>
+      </div>
+    </section>
+    <section class="inspector" id="inspector" aria-live="polite"></section>
+  </aside>
+
+  <footer class="statusbar">
+    <span class="status-chip good" id="status-chip">Compiled</span>
+    <span class="status-msg" id="status-msg"></span>
+    <span class="status-counts" id="status-counts"></span>
+    <span class="save-state" id="save-state"></span>
+  </footer>
+</div>
+
+<div class="search-pop" id="search-pop" hidden>
+  <input id="search-input" type="search" placeholder="Add a node…" autocomplete="off" aria-label="Find a node to add">
+  <div class="search-list" id="search-list" role="listbox"></div>
+</div>
+
+<div class="modal" id="modal" hidden>
+  <div class="modal-card" id="modal-card" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <header class="modal-head">
+      <h2 id="modal-title"></h2>
+      <button class="btn icon" id="modal-close" type="button" aria-label="Close">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+      </button>
+    </header>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" hidden></div>
+<input type="file" id="file-input" accept=".json,application/json" hidden>
+<script type="module" src="js/app.js"></script>
