@@ -3,7 +3,7 @@
 
 import { NODE_DEFS, CATEGORIES, BINDS, rgbToHex, hexToLinear, normStops, allowedIn } from './nodes.js';
 import { defaultParams, collectSettings, inferTypes } from './codegen.js';
-import { buildPreview, buildIris, sliderValues, buildNodePreview, previewableNode, PREVIEW_TILE, choiceOptions, choiceIndex, defaultEntityGraph, normShadows, SHADOW_CHOICES } from './targets.js';
+import { buildPreview, buildIris, sliderValues, buildNodePreview, previewableNode, PREVIEW_TILE, choiceOptions, choiceIndex, defaultEntityGraph, normShadows, SHADOW_CHOICES, normGrass, GRASS_CHOICES } from './targets.js';
 import { GraphEditor } from './editor.js';
 import { Preview } from './preview.js';
 import { PRESETS } from './presets.js';
@@ -69,6 +69,7 @@ const state = {
   modelSel: null,
   modelNext: 1,
   shadows: normShadows(),
+  grass: normGrass(),
 };
 const EMPTY_GRAPH = { nodes: [], links: [], nextId: 1 };
 
@@ -93,7 +94,7 @@ let clipboard = null;
 let lastPointer = null;
 
 function snapshot() {
-  return JSON.stringify({ graphs: state.graphs, packName: state.packName, textures: state.textures, texSel: state.texSel, texNext: state.texNext, models: state.models, modelSel: state.modelSel, modelNext: state.modelNext, shadows: state.shadows });
+  return JSON.stringify({ graphs: state.graphs, packName: state.packName, textures: state.textures, texSel: state.texSel, texNext: state.texNext, models: state.models, modelSel: state.modelSel, modelNext: state.modelNext, shadows: state.shadows, grass: state.grass });
 }
 
 function pushHistory() {
@@ -118,6 +119,7 @@ function restore(s) {
   state.modelSel = data.modelSel || null;
   state.modelNext = Math.max(state.modelNext, data.modelNext || 1);
   state.shadows = normShadows(data.shadows);
+  state.grass = normGrass(data.grass);
   TX.syncRegistry();
   editor.load(currentGraph(), state.views[viewKey()]);
   syncTextureView();
@@ -153,7 +155,7 @@ let saveTimer = 0;
 function save() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
-    const ok = store.set(STORE_KEY, JSON.stringify({ graphs: state.graphs, packName: state.packName, kind: state.kind, presetId: state.presetId, textures: state.textures, texSel: state.texSel, texNext: state.texNext, models: state.models, modelSel: state.modelSel, modelNext: state.modelNext, shadows: state.shadows }));
+    const ok = store.set(STORE_KEY, JSON.stringify({ graphs: state.graphs, packName: state.packName, kind: state.kind, presetId: state.presetId, textures: state.textures, texSel: state.texSel, texNext: state.texNext, models: state.models, modelSel: state.modelSel, modelNext: state.modelNext, shadows: state.shadows, grass: state.grass }));
     if (ok === false && !save.warned) {
       save.warned = true;
       toast('Too big to autosave in this browser. Save a graph file from Export to keep your work.');
@@ -197,6 +199,7 @@ function loadInitial() {
         state.modelSel = d.modelSel || null;
         state.modelNext = d.modelNext || state.models.length + 1;
         state.shadows = normShadows(d.shadows);
+        state.grass = normGrass(d.grass);
         return;
       }
     } catch { /* fall through to the default preset */ }
@@ -232,6 +235,7 @@ function compileNow() {
     if (!r.ok) glErrors = r;
     preview.setSettings(built.settings);
     preview.setShadows(state.shadows);
+    preview.setGrass?.(state.grass);
   }
   editor.setErrors(lastErrors.filter((e) => e.graph === state.kind || e.graph === null));
   renderStatus();
@@ -1036,6 +1040,7 @@ function renderGraphInspector(box) {
   }
   box.append(sec);
   box.append(shadowSection());
+  box.append(grassSection());
 
   const tips = el('section', 'insp-sec');
   tips.append(el('h3', null, 'Quick moves'));
@@ -1119,6 +1124,52 @@ function shadowSection() {
   return sec;
 }
 
+// Pack-wide 3D grass: low-poly blades grown on grass blocks by a geometry
+// shader in game. The preview grows the same blades on its grass.
+function grassSection() {
+  const g = state.grass;
+  const sec = el('section', 'insp-sec');
+  sec.id = 'grass-sec';
+  sec.append(el('h3', null, '3D grass'));
+  const commit = () => { preview.setGrass?.(state.grass); pushHistory(); };
+  const sw = el('label', 'ctl-switch');
+  const cb = el('input');
+  cb.type = 'checkbox';
+  cb.checked = g.on;
+  cb.addEventListener('change', () => {
+    state.grass = { ...state.grass, on: cb.checked };
+    commit();
+    renderInspector();
+  });
+  sw.append(cb, el('span', 'switch'), el('span', null, 'Low-poly grass on grass blocks'));
+  sec.append(sw, el('p', 'field-hint', 'A geometry shader grows little triangle blades on every grass block near the player. They sway in the wind and take the biome colour. No mod needed. Players can turn it off or change it in Iris → Shader Settings → 3D Grass.'));
+  if (!g.on) return sec;
+  const slider = (label, key, list, fmt, hint) => {
+    const range = el('input', 'in-range');
+    range.type = 'range';
+    range.min = '0';
+    range.max = String(list.length - 1);
+    range.step = '1';
+    range.value = String(Math.max(0, list.indexOf(g[key])));
+    range.setAttribute('aria-label', label);
+    const out = el('output', 'in-range-val', fmt(g[key]));
+    range.addEventListener('input', () => {
+      state.grass = { ...state.grass, [key]: list[Number(range.value)] };
+      out.textContent = fmt(state.grass[key]);
+      preview.setGrass?.(state.grass);
+    });
+    range.addEventListener('change', () => pushHistory());
+    const rr = el('div', 'range-row');
+    rr.append(range, out);
+    sec.append(field(label, rr, hint));
+  };
+  slider('Blades', 'density', GRASS_CHOICES.density, (v) => `${v * 2} per block`, 'More blades look fuller and cost more FPS.');
+  slider('Height', 'height', GRASS_CHOICES.height, (v) => `${v} blocks`, 'Average blade height. Each blade is a bit taller or shorter.');
+  slider('Wind', 'wind', GRASS_CHOICES.wind, (v) => (v ? `${v}×` : 'still'), 'How much the blades sway. In game they sway more in rain.');
+  slider('Distance', 'distance', GRASS_CHOICES.distance, (v) => `${v} blocks`, 'How far from the player blades grow in game. They thin out towards the edge.');
+  return sec;
+}
+
 // --------------------------------------------------------------- status
 
 function renderStatus() {
@@ -1199,7 +1250,7 @@ async function copyText(text, btn) {
 }
 
 function openCode() {
-  const { files, errors } = buildIris(state.graphs, { name: state.packName, modelBlocks: MD.modelBlocks(), shadows: state.shadows });
+  const { files, errors } = buildIris(state.graphs, { name: state.packName, modelBlocks: MD.modelBlocks(), shadows: state.shadows, grass: state.grass });
   const wrap = el('div', 'code-view');
   const order = ['shaders/gbuffers_terrain.fsh', 'shaders/gbuffers_terrain.vsh', 'shaders/gbuffers_entities.fsh', 'shaders/gbuffers_entities.vsh', 'shaders/gbuffers_hand.fsh', 'shaders/composite1.fsh', 'shaders/composite.fsh', 'shaders/shadow.vsh', 'shaders/shadow.fsh', 'shaders/shaders.properties', 'shaders/block.properties', 'shaders/item.properties', 'shaders/entity.properties', 'shaders/lang/en_us.lang'];
   const names = [...order, ...Object.keys(files).filter((f) => !order.includes(f))];
@@ -1265,12 +1316,12 @@ async function saveFile(filename, blob) {
 }
 
 function graphJSON() {
-  return JSON.stringify({ app: 'BlockGraph', version: 3, packName: state.packName, graphs: state.graphs, textures: state.textures, texNext: state.texNext, models: state.models, modelNext: state.modelNext, shadows: state.shadows, meshes: MD.meshesForFile() }, null, 2);
+  return JSON.stringify({ app: 'BlockGraph', version: 3, packName: state.packName, graphs: state.graphs, textures: state.textures, texNext: state.texNext, models: state.models, modelNext: state.modelNext, shadows: state.shadows, grass: state.grass, meshes: MD.meshesForFile() }, null, 2);
 }
 
 function openExport() {
   const wrap = el('div', 'export-view');
-  const { files, errors, settings } = buildIris(state.graphs, { name: state.packName, modelBlocks: MD.modelBlocks(), shadows: state.shadows });
+  const { files, errors, settings } = buildIris(state.graphs, { name: state.packName, modelBlocks: MD.modelBlocks(), shadows: state.shadows, grass: state.grass });
 
   const nameIn = el('input', 'in-text');
   nameIn.id = 'pack-name';
@@ -1318,7 +1369,7 @@ function openExport() {
   dl.type = 'button';
   dl.addEventListener('click', async () => {
     const tex = await TX.shaderTextureFiles(state.graphs);
-    const built = buildIris(state.graphs, { name: state.packName, customTextures: tex.list, modelBlocks: MD.modelBlocks(), shadows: state.shadows });
+    const built = buildIris(state.graphs, { name: state.packName, customTextures: tex.list, modelBlocks: MD.modelBlocks(), shadows: state.shadows, grass: state.grass });
     const zipFiles = { ...built.files, ...tex.files, 'blockgraph-graph.json': graphJSON() };
     await saveFile(`${slug(state.packName)}.zip`, makeZip(zipFiles));
   });
@@ -1574,6 +1625,7 @@ function bindUI() {
       state.modelNext = Math.max(d.modelNext || 1, state.models.length + 1);
       state.modelSel = state.models[0]?.id || null;
       state.shadows = normShadows(d.shadows);
+      state.grass = normGrass(d.grass);
       state.views = { terrain: null, entity: null, post: null };
       TX.syncRegistry();
       TX.loadAll().then(() => MD.refreshViews());

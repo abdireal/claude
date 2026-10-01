@@ -24,10 +24,12 @@ import net.minecraft.util.GsonHelper;
  * @param materials   OBJ material name to texture slot. Unlisted materials use a slot with the same name,
  *                    then {@code texture}, then {@code particle}.
  * @param emissive    OBJ materials drawn at full brightness, like glowing parts.
+ * @param tinted      OBJ materials coloured like the block's or item's own tint: grass and leaves by biome,
+ *                    water by biome, and so on ({@code "*"}: every material).
  * @param renderLayer chunk layer for block models ({@code solid}, {@code cutout}, {@code translucent}), or null for the block's own.
  * @param transform   applied to every vertex, in blocks, around the block centre.
  */
-public record ObjOptions(boolean flipV, Map<String, String> materials, Set<String> emissive,
+public record ObjOptions(boolean flipV, Map<String, String> materials, Set<String> emissive, Set<String> tinted,
 		@Nullable ChunkSectionLayer renderLayer, Matrix4f transform) {
 	public static ObjOptions fromJson(JsonObject json) {
 		boolean flipV = GsonHelper.getAsBoolean(json, "flip_v", true);
@@ -45,6 +47,21 @@ public record ObjOptions(boolean flipV, Map<String, String> materials, Set<Strin
 		if (json.has("emissive")) {
 			for (JsonElement e : GsonHelper.getAsJsonArray(json, "emissive")) {
 				emissive.add(e.getAsString());
+			}
+		}
+
+		// "tint": true for every material, or a list of material names.
+		Set<String> tinted = new HashSet<>();
+
+		if (json.has("tint")) {
+			JsonElement t = json.get("tint");
+
+			if (t.isJsonArray()) {
+				for (JsonElement e : t.getAsJsonArray()) {
+					tinted.add(e.getAsString());
+				}
+			} else if (t.getAsBoolean()) {
+				tinted.add("*");
 			}
 		}
 
@@ -73,7 +90,11 @@ public record ObjOptions(boolean flipV, Map<String, String> materials, Set<Strin
 					.translate(-0.5f, -0.5f, -0.5f);
 		}
 
-		return new ObjOptions(flipV, Map.copyOf(materials), Set.copyOf(emissive), layer, transform);
+		return new ObjOptions(flipV, Map.copyOf(materials), Set.copyOf(emissive), Set.copyOf(tinted), layer, transform);
+	}
+
+	public boolean isTinted(String material) {
+		return tinted.contains("*") || tinted.contains(material);
 	}
 
 	public Matrix3f normalTransform() {

@@ -6,7 +6,7 @@
 import { compileStage, collectSettings, defaultParams } from './codegen.js';
 import { GLSL_HELPERS, GLSL_FRAG_HELPERS, NODE_DEFS, texSampler, ID_GROUPS } from './nodes.js';
 
-export const BLOCK_IDS = { leaves: 10001, plants: 10002, water: 10003, model: 10004 };
+export const BLOCK_IDS = { leaves: 10001, plants: 10002, water: 10003, model: 10004, grass: 10005 };
 
 // ------------------------------------------------------------------ shadows
 // Pack-wide sun shadows. Each value is also an option in Iris → Shader Settings.
@@ -37,6 +37,29 @@ export function normShadows(s) {
     resolution: nearest(SHADOW_CHOICES.resolution, o.resolution ?? d.resolution, d.resolution),
     distance: nearest(SHADOW_CHOICES.distance, o.distance ?? d.distance, d.distance),
     sunAngle: nearest(SHADOW_CHOICES.sunAngle, o.sunAngle ?? d.sunAngle, d.sunAngle),
+  };
+}
+
+// ------------------------------------------------------------- 3D grass
+// Pack-wide low-poly grass grown by a geometry shader on top of grass blocks.
+
+export const GRASS_CHOICES = {
+  density: [2, 3, 4, 6, 8, 10, 12],
+  height: [0.15, 0.2, 0.25, 0.3, 0.35, 0.4, 0.5, 0.6],
+  distance: [8, 12, 16, 24, 32, 48, 64],
+  wind: [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 3],
+};
+export const GRASS_DEFAULTS = { on: false, density: 6, height: 0.3, distance: 24, wind: 1 };
+
+export function normGrass(g) {
+  const d = GRASS_DEFAULTS;
+  const o = g && typeof g === 'object' ? g : {};
+  return {
+    on: o.on === undefined ? d.on : !!o.on,
+    density: nearest(GRASS_CHOICES.density, o.density ?? d.density, d.density),
+    height: nearest(GRASS_CHOICES.height, o.height ?? d.height, d.height),
+    distance: nearest(GRASS_CHOICES.distance, o.distance ?? d.distance, d.distance),
+    wind: nearest(GRASS_CHOICES.wind, o.wind ?? d.wind, d.wind),
   };
 }
 
@@ -169,8 +192,8 @@ function terrainBuiltins(target, stage) {
   const pv = target === 'preview';
   const v = stage === 'vertex';
   const src = pv
-    ? { uv: v ? 'a_uv' : 'v_uv', pos: v ? 'a_pos' : 'v_world', n: v ? 'a_normal' : 'v_normal', col: v ? 'a_color' : 'v_color', lm: v ? 'a_lm' : 'v_lm', top: v ? 'a_top' : 'v_top', dist: v ? 'length(a_pos - u_cam)' : 'v_dist' }
-    : { uv: 'texcoord', pos: v ? 'wPos' : 'worldPos', n: v ? 'wNormal' : 'worldNormal', col: 'glcolor', top: v ? 'top' : 'plantTop', dist: v ? 'length(playerPos.xyz)' : 'viewDist' };
+    ? { uv: v ? 'a_uv' : 'v_uv', pos: v ? 'a_pos' : 'v_world', n: v ? 'a_normal' : 'v_normal', col: v ? 'a_color' : 'v_color', lm: v ? 'a_lm' : 'v_lm', top: v ? 'a_top' : 'v_top', height: v ? 'a_top' : 'v_top', dist: v ? 'length(a_pos - u_cam)' : 'v_dist' }
+    : { uv: 'texcoord', pos: v ? 'wPos' : 'worldPos', n: v ? 'wNormal' : 'worldNormal', col: 'glcolor', top: v ? 'top' : 'plantTop', height: v ? 'blockHeight' : 'plantTop', dist: v ? 'length(playerPos.xyz)' : 'viewDist' };
   const lines = [
     `vec2 bg_uv = ${src.uv};`,
     ...COMMON_TIME(pv),
@@ -187,6 +210,7 @@ function terrainBuiltins(target, stage) {
       'float bg_isPlant = abs(bg_blockId - 2.0) < 0.5 ? 1.0 : 0.0;',
       'float bg_isWater = abs(bg_blockId - 3.0) < 0.5 ? 1.0 : 0.0;',
       'float bg_isModel = abs(bg_blockId - 4.0) < 0.5 ? 1.0 : 0.0;',
+      'float bg_isGrass = abs(bg_blockId - 5.0) < 0.5 ? 1.0 : 0.0;',
     );
   } else {
     lines.push(
@@ -197,10 +221,13 @@ function terrainBuiltins(target, stage) {
       `float bg_isPlant = bg_id == ${BLOCK_IDS.plants} ? 1.0 : 0.0;`,
       `float bg_isWater = bg_id == ${BLOCK_IDS.water} ? 1.0 : 0.0;`,
       `float bg_isModel = bg_id == ${BLOCK_IDS.model} ? 1.0 : 0.0;`,
+      `float bg_isGrass = bg_id == ${BLOCK_IDS.grass} ? 1.0 : 0.0;`,
     );
   }
   lines.push(
     `float bg_plantTop = ${src.top};`,
+    '// Height of this point in its block: 0 at the bottom, 1 at the top, more for model parts sticking out.',
+    `float bg_blockHeight = ${src.height};`,
     `float bg_viewDist = ${src.dist};`,
     'vec3 bg_viewDir = bg_safeNormalize(bg_camPos - bg_worldPos);',
     'vec2 bg_faceUV = bg_faceUVOf(bg_worldPos, bg_normal);',
@@ -757,7 +784,9 @@ ${indent(COMMON_TIME(true), '  ')}
   float bg_isPlant = 0.0;
   float bg_isWater = 0.0;
   float bg_isModel = 0.0;
+  float bg_isGrass = 0.0;
   float bg_plantTop = step(0.0, p.y);
+  float bg_blockHeight = bg_plantTop;
   float bg_viewDist = 8.0;
   vec3 bg_viewDir = vec3(0.0, 0.0, 1.0);
   vec2 bg_faceUV = fract(sph * vec2(4.0, 2.0));
@@ -867,13 +896,23 @@ function settingsUsedIn(stageResult, all) {
   return m;
 }
 
-function irisTerrain(c, programName, sh) {
+// With 3D grass, gbuffers_terrain.gsh sits between the stages: the vertex
+// shader's outputs get a vs_ prefix and the geometry shader passes them on.
+const GRASS_VARYINGS = [
+  ['vec2', 'texcoord'], ['vec2', 'lmcoord'], ['vec4', 'glcolor'], ['vec3', 'worldPos'], ['vec3', 'worldNormal'],
+  ['vec4', 'worldTangent'], ['float', 'viewDist'], ['float', 'plantTop'], ['int', 'blockId'],
+];
+
+function irisTerrain(c, programName, sh, withGrass = false) {
   const vSet = settingsUsedIn(c.tVert, c.settings);
   const fSet = settingsUsedIn(c.tFrag, c.settings);
   const o = c.tFrag.outputs;
+  const rename = withGrass
+    ? `// Outputs go to the 3D grass geometry shader (${programName}.gsh) first.\n${GRASS_VARYINGS.map(([, n]) => `#define ${n} vs_${n}`).join('\n')}\n`
+    : '';
 
   const vsh = `${HEADER(`${programName}.vsh: Blocks graph, vertex stage (Vertex Offset)`)}
-${irisSettingDefines(vSet)}
+${rename}${irisSettingDefines(vSet)}
 
 ${IRIS_COMMON_UNIFORMS}
 uniform sampler2D gtexture;
@@ -882,6 +921,7 @@ uniform sampler2D lightmap;
 in vec4 mc_Entity;
 in vec2 mc_midTexCoord;
 in vec4 at_tangent;
+in vec4 at_midBlock;
 
 out vec2 texcoord;
 out vec2 lmcoord;
@@ -901,7 +941,9 @@ void main() {
 	lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
 	glcolor = gl_Color;
 	int id = int(mc_Entity.x + 0.5);
-	float top = gl_MultiTexCoord0.y < mc_midTexCoord.y ? 1.0 : 0.0;
+	// at_midBlock points from the vertex to the block centre, in 1/64 blocks.
+	float blockHeight = 0.5 - at_midBlock.y / 64.0;
+	float top = clamp(blockHeight, 0.0, 1.0);
 	blockId = id;
 	plantTop = top;
 
@@ -962,6 +1004,112 @@ ${IRIS_MATERIAL_WRITES}
   return { vsh, fsh };
 }
 
+function irisGrassOptions(g) {
+  const f2 = (x) => x.toFixed(2);
+  return [
+    '#define BG_GRASS // Low-poly 3D grass on grass blocks',
+    `#define BG_GRASS_DENSITY ${g.density} // [${GRASS_CHOICES.density.join(' ')}]`,
+    `#define BG_GRASS_HEIGHT ${f2(g.height)} // [${GRASS_CHOICES.height.map(f2).join(' ')}]`,
+    `#define BG_GRASS_DISTANCE ${g.distance}.0 // [${GRASS_CHOICES.distance.map((x) => `${x}.0`).join(' ')}]`,
+    `#define BG_GRASS_WIND ${f2(g.wind)} // [${GRASS_CHOICES.wind.map(f2).join(' ')}]`,
+  ].join('\n');
+}
+
+// gbuffers_terrain.gsh: passes every triangle through, and on the top of
+// grass blocks grows low-poly blades: one triangle each, turned to face the
+// camera, coloured by the grass texture and biome tint, swaying in the wind.
+function irisGrass(g) {
+  const maxBlades = Math.max(...GRASS_CHOICES.density);
+  const ins = GRASS_VARYINGS.map(([t, n]) => `${t === 'int' ? 'flat ' : ''}in ${t} vs_${n}[];`).join('\n');
+  const outs = GRASS_VARYINGS.map(([t, n]) => `${t === 'int' ? 'flat ' : ''}out ${t} ${n};`).join('\n');
+  return `${HEADER('gbuffers_terrain.gsh: 3D grass. Grows low-poly blades on grass blocks, swaying in the wind.')}
+${irisGrassOptions(g)}
+
+layout(triangles) in;
+layout(triangle_strip, max_vertices = ${3 + maxBlades * 3}) out;
+
+uniform mat4 gbufferModelView;
+uniform mat4 gbufferProjection;
+uniform vec3 cameraPosition;
+uniform float frameTimeCounter;
+uniform float rainStrength;
+
+${ins}
+
+${outs}
+
+float grassHash(vec3 p) {
+	p = fract(p * 0.1031);
+	p += dot(p, p.zyx + 31.32);
+	return fract((p.x + p.y) * p.z);
+}
+
+void passThrough(int i) {
+${GRASS_VARYINGS.map(([, n]) => `\t${n} = vs_${n}[i];`).join('\n')}
+	gl_Position = gl_in[i].gl_Position;
+	EmitVertex();
+}
+
+void bladeVertex(vec3 wp, vec2 uv, vec2 lm, vec4 col, vec3 n, vec4 tangent, float top) {
+	vec3 pp = wp - cameraPosition;
+	texcoord = uv;
+	lmcoord = lm;
+	glcolor = col;
+	worldPos = wp;
+	worldNormal = n;
+	worldTangent = tangent;
+	viewDist = length(pp);
+	plantTop = top;
+	blockId = ${BLOCK_IDS.grass};
+	gl_Position = gbufferProjection * (gbufferModelView * vec4(pp, 1.0));
+	EmitVertex();
+}
+
+void main() {
+	for (int i = 0; i < 3; i++) passThrough(i);
+	EndPrimitive();
+#ifdef BG_GRASS
+	// only the top faces of grass blocks, and only near the player
+	if (vs_blockId[0] != ${BLOCK_IDS.grass} || vs_worldNormal[0].y < 0.9) return;
+	float dist = min(vs_viewDist[0], min(vs_viewDist[1], vs_viewDist[2]));
+	int count = int(float(BG_GRASS_DENSITY) * (1.0 - smoothstep(BG_GRASS_DISTANCE * 0.6, BG_GRASS_DISTANCE, dist)) + 0.5);
+	vec3 a = vs_worldPos[0], b = vs_worldPos[1], c = vs_worldPos[2];
+	vec3 toCam = cameraPosition - (a + b + c) / 3.0;
+	vec3 side = normalize(vec3(-toCam.z, 0.0, toCam.x) + vec3(1.0e-4, 0.0, 0.0));
+	for (int k = 0; k < ${maxBlades}; k++) {
+		if (k >= count) break;
+		// a random spot on this triangle, the same every frame
+		vec3 seed = floor(a * 8.0 + 0.5) + floor(b * 8.0 + 0.5) * 0.37 + vec3(float(k) * 1.37, float(k) * 2.71, float(k) * 0.53);
+		float r1 = grassHash(seed), r2 = grassHash(seed + 11.1), r3 = grassHash(seed + 23.7), r4 = grassHash(seed + 37.3);
+		if (r1 + r2 > 1.0) { r1 = 1.0 - r1; r2 = 1.0 - r2; }
+		vec3 w = vec3(1.0 - r1 - r2, r1, r2);
+		vec3 base = a * w.x + b * w.y + c * w.z;
+		vec2 uv = vs_texcoord[0] * w.x + vs_texcoord[1] * w.y + vs_texcoord[2] * w.z;
+		vec2 lm = vs_lmcoord[0] * w.x + vs_lmcoord[1] * w.y + vs_lmcoord[2] * w.z;
+		vec4 col = vs_glcolor[0] * w.x + vs_glcolor[1] * w.y + vs_glcolor[2] * w.z;
+		float h = BG_GRASS_HEIGHT * (0.55 + 0.9 * r3);
+		float halfWidth = 0.03 + 0.025 * r4;
+		// the tip sways; gusts roll across the field, stronger in rain
+		float t = frameTimeCounter;
+		vec2 wind = vec2(sin(t * 1.9 + base.x * 0.7 + base.z * 0.3), sin(t * 1.4 + base.z * 0.8 - base.x * 0.2) * 0.6);
+		wind *= (0.15 + 0.2 * rainStrength) * BG_GRASS_WIND * h;
+		vec3 tip = base + vec3((r4 - 0.5) * h * 0.5 + wind.x, h, (r3 - 0.5) * h * 0.5 + wind.y);
+		vec3 p0 = base - side * halfWidth;
+		vec3 p1 = base + side * halfWidth;
+		// face the camera: back faces are culled
+		if (dot(cross(p1 - p0, tip - p0), toCam) < 0.0) { vec3 s = p0; p0 = p1; p1 = s; }
+		vec3 n = normalize(vec3(0.0, 1.0, 0.0) + normalize(toCam) * 0.35);
+		vec4 tangent = vec4(side, 1.0);
+		bladeVertex(p0, uv, lm, vec4(col.rgb * 0.7, col.a), n, tangent, 0.0);
+		bladeVertex(p1, uv, lm, vec4(col.rgb * 0.7, col.a), n, tangent, 0.0);
+		bladeVertex(tip, uv, lm, vec4(col.rgb * 1.15, col.a), n, tangent, 1.0);
+		EndPrimitive();
+	}
+#endif
+}
+`;
+}
+
 // shadow.vsh / shadow.fsh: draws terrain, mobs and block entities from the
 // sun into shadowtex. The Blocks graph's Vertex Offset runs here too, so
 // waving leaves and plants cast waving shadows.
@@ -979,6 +1127,7 @@ uniform sampler2D lightmap;
 
 in vec4 mc_Entity;
 in vec2 mc_midTexCoord;
+in vec4 at_midBlock;
 
 out vec2 texcoord;
 out vec2 lmcoord;
@@ -993,7 +1142,8 @@ void main() {
 	lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
 	glcolor = gl_Color;
 	int id = int(mc_Entity.x + 0.5);
-	float top = gl_MultiTexCoord0.y < mc_midTexCoord.y ? 1.0 : 0.0;
+	float blockHeight = 0.5 - at_midBlock.y / 64.0;
+	float top = clamp(blockHeight, 0.0, 1.0);
 
 	vec4 playerPos = shadowModelViewInverse * (gl_ModelViewMatrix * gl_Vertex);
 	vec3 wPos = playerPos.xyz + cameraPosition;
@@ -1485,8 +1635,12 @@ const PLANTS = [
 
 export function buildIris(graphs, opts = {}) {
   const c = compileAll(graphs);
+  // Plants, leaves and grass blocks with a model keep their own ID, so they still wave.
+  const grouped = new Set([...LEAVES, ...PLANTS, 'water', 'grass_block']);
+  const modelBlocks = (opts.modelBlocks || []).filter((b) => !grouped.has(b));
   const sh = normShadows(opts.shadows);
-  const terrain = irisTerrain(c, 'gbuffers_terrain', sh);
+  const grass = normGrass(opts.grass);
+  const terrain = irisTerrain(c, 'gbuffers_terrain', sh, grass.on);
   const water = irisTerrain(c, 'gbuffers_water', sh);
   const comp = irisComposite(c, sh);
   const refl = irisReflections();
@@ -1494,6 +1648,7 @@ export function buildIris(graphs, opts = {}) {
   const files = {};
   files['shaders/gbuffers_terrain.vsh'] = terrain.vsh;
   files['shaders/gbuffers_terrain.fsh'] = terrain.fsh;
+  if (grass.on) files['shaders/gbuffers_terrain.gsh'] = irisGrass(grass);
   files['shaders/gbuffers_water.vsh'] = water.vsh;
   files['shaders/gbuffers_water.fsh'] = water.fsh;
   files['shaders/composite.vsh'] = refl.vsh;
@@ -1518,16 +1673,17 @@ export function buildIris(graphs, opts = {}) {
     `block.${BLOCK_IDS.leaves}=${LEAVES.join(' ')}`,
     `block.${BLOCK_IDS.plants}=${PLANTS.join(' ')}`,
     `block.${BLOCK_IDS.water}=water`,
-    ...(opts.modelBlocks?.length ? [
+    `block.${BLOCK_IDS.grass}=grass_block`,
+    ...(modelBlocks.length ? [
       '# Blocks that use a 3D model from the Models tab (BlockGraph Models mod).',
-      `block.${BLOCK_IDS.model}=${opts.modelBlocks.join(' ')}`,
+      `block.${BLOCK_IDS.model}=${modelBlocks.join(' ')}`,
     ] : []),
     '',
     '# Block entities, read through blockEntityId by the Block Entity Mask node.',
     ...Object.values(ID_GROUPS.blockEntities).map((g) => `block.${g.id}=${g.names.join(' ')}`),
     '',
     '# Common building blocks. As items they count as "Blocks as items" (currentRenderedItemId).',
-    `block.${ID_GROUPS.buildingBlocks.id}=${ID_GROUPS.buildingBlocks.names.join(' ')}`,
+    `block.${ID_GROUPS.buildingBlocks.id}=${ID_GROUPS.buildingBlocks.names.filter((n) => n !== 'grass_block').join(' ')}`,
     '',
   ].join('\n');
 
@@ -1548,6 +1704,7 @@ export function buildIris(graphs, opts = {}) {
   const sliders = names.filter((n) => c.settings.get(n).kind === 'slider');
   const shadowOpts = ['BG_SHADOWS', 'BG_SHADOW_STRENGTH', 'BG_SHADOW_SOFTNESS', 'shadowMapResolution', 'shadowDistance', 'sunPathRotation'];
   const reflOpts = ['BG_REFLECTIONS', 'BG_REFLECTION_STEPS', 'BG_MATERIAL_VIEW'];
+  const grassOpts = ['BG_GRASS', 'BG_GRASS_DENSITY', 'BG_GRASS_HEIGHT', 'BG_GRASS_DISTANCE', 'BG_GRASS_WIND'];
   const translucent = ['gbuffers_water', 'gbuffers_hand_water', 'gbuffers_entities_translucent', 'gbuffers_block_translucent'];
   const props = [
     `# ${opts.name || 'BlockGraph pack'}, made with BlockGraph.`,
@@ -1571,10 +1728,11 @@ export function buildIris(graphs, opts = {}) {
   }
   props.push('', '# Settings menu (Iris → Shader Settings). Built from your Slider, On/Off and Dropdown nodes,');
   props.push('# plus a Shadows page.');
-  props.push(`screen = [SHADOWS] [REFLECTIONS]${names.length ? ' ' + names.join(' ') : ''}`);
+  props.push(`screen = [SHADOWS] [REFLECTIONS]${grass.on ? ' [GRASS]' : ''}${names.length ? ' ' + names.join(' ') : ''}`);
   props.push(`screen.SHADOWS = ${shadowOpts.join(' ')}`);
   props.push(`screen.REFLECTIONS = ${reflOpts.join(' ')}`);
-  props.push(`sliders = ${[...sliders, ...shadowOpts.slice(1), 'BG_REFLECTION_STEPS'].join(' ')}`);
+  if (grass.on) props.push(`screen.GRASS = ${grassOpts.join(' ')}`);
+  props.push(`sliders = ${[...sliders, ...shadowOpts.slice(1), 'BG_REFLECTION_STEPS', ...(grass.on ? grassOpts.slice(1) : [])].join(' ')}`);
   files['shaders/shaders.properties'] = props.join('\n') + '\n';
 
   const lang = [
@@ -1604,6 +1762,18 @@ export function buildIris(graphs, opts = {}) {
     'value.BG_MATERIAL_VIEW.0=Off',
     'value.BG_MATERIAL_VIEW.1=Normals',
     'value.BG_MATERIAL_VIEW.2=Shine',
+    'screen.GRASS=3D Grass',
+    'screen.GRASS.comment=Low-poly grass blades on grass blocks, swaying in the wind. Made with BlockGraph.',
+    'option.BG_GRASS=3D Grass',
+    'option.BG_GRASS.comment=Grows low-poly blades on grass blocks near you.',
+    'option.BG_GRASS_DENSITY=Blades',
+    'option.BG_GRASS_DENSITY.comment=Blades per half block. More is fuller and slower.',
+    'option.BG_GRASS_HEIGHT=Height',
+    'option.BG_GRASS_HEIGHT.comment=How tall the blades grow, in blocks.',
+    'option.BG_GRASS_DISTANCE=Distance',
+    'option.BG_GRASS_DISTANCE.comment=How far from you blades grow, in blocks.',
+    'option.BG_GRASS_WIND=Wind',
+    'option.BG_GRASS_WIND.comment=How much the blades sway. Stronger in rain.',
   ];
   for (const n of names) {
     const s = c.settings.get(n);

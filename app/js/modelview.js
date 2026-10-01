@@ -42,7 +42,9 @@ void main() {
   float light = mix(shade * 0.82 + key * 0.18, 1.0, u_glow);
   vec3 c = t.rgb * u_color * light;
   // Faces seen from behind are inside-out. Minecraft hides them, so tint them.
+  // They sit a hair behind, so a double-sided face (a grass blade) shows its front.
   if (!gl_FrontFacing) c = mix(c, vec3(0.9, 0.2, 0.35), 0.55);
+  gl_FragDepth = gl_FragCoord.z + (gl_FrontFacing ? 0.0 : 2.0e-5);
   c = mix(c, c * 0.7 + vec3(0.25, 0.4, 0.75) * 0.3, u_selected);
   if (u_wire > 0.5) {
     vec3 d = fwidth(v_bary);

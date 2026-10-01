@@ -354,6 +354,7 @@ function buildScene() {
 
   const opaque = [];
   const water = [];
+  const grassTops = []; // [x, y, z, block light, sky light] of every grass block top, for 3D grass
 
   // face: normal, 4 corners (CCW from outside), shade
   const FACES = [
@@ -403,6 +404,7 @@ function buildScene() {
         case B.GRASS:
           tile = f.side === 'top' ? TILE.grassTop : f.side === 'bottom' ? TILE.dirt : TILE.grassSide;
           if (f.side === 'top') tint = TINT.grass;
+          id = 5;
           break;
         case B.DIRT: tile = TILE.dirt; break;
         case B.STONE: tile = TILE.stone; break;
@@ -419,6 +421,7 @@ function buildScene() {
       let lm = lightAt(x + 0.5 + f.n[0] * 0.5, y + 0.5 + f.n[1] * 0.5, z + 0.5 + f.n[2] * 0.5, underTree(x, y + 0.5, z));
       if (b === B.GLOW) lm = [1, lm[1]];
       pushQuad(opaque, corners, f.n, tile, color, lm, id, f.side === 'top' ? TOP_UV : FACE_UV);
+      if (b === B.GRASS && f.side === 'top') grassTops.push([x, y + 1, z, lm[0], lm[1]]);
     }
   }
 
@@ -435,7 +438,41 @@ function buildScene() {
     const tops = [1, 0, 0, 1, 0, 1];
     for (const q of quads) pushQuad(opaque, q, [0, 1, 0], tile, [...tint, 1], lm, id, FACE_UV, tops);
   }
-  return { opaque: new Float32Array(opaque), water: new Float32Array(water) };
+  return { opaque: new Float32Array(opaque), water: new Float32Array(water), grassTops };
+}
+
+// Same blades as the 3D grass geometry shader (gbuffers_terrain.gsh): one
+// triangle each, on grass block tops, swaying with the same wind. Rebuilt
+// every frame, since the wind moves them.
+const hash = (a, b, c) => {
+  const v = Math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453;
+  return v - Math.floor(v);
+};
+function buildGrassBlades(tops, cfg, time, rain) {
+  const out = new Float32Array(tops.length * cfg.density * 2 * 3 * 16);
+  const [u0, v0] = [(TILE.grassTop % ATLAS_TILES) / ATLAS_TILES, Math.floor(TILE.grassTop / ATLAS_TILES) / ATLAS_TILES];
+  const s = 1 / ATLAS_TILES;
+  let o = 0;
+  for (const [x, y, z, bl, sky] of tops) {
+    for (let k = 0; k < cfg.density * 2; k++) {
+      const r1 = hash(x, z, k), r2 = hash(z, x, k + 7), r3 = hash(x + k, z, 3), r4 = hash(x, z + k, 5), r5 = hash(k, x, z);
+      const bx = x + 0.05 + r1 * 0.9, bz = z + 0.05 + r2 * 0.9;
+      const h = cfg.height * (0.55 + 0.9 * r3);
+      const half = 0.03 + 0.025 * r4;
+      const yaw = r5 * Math.PI;
+      const sx = Math.cos(yaw) * half, sz = Math.sin(yaw) * half;
+      const amp = (0.15 + 0.2 * rain) * cfg.wind * h;
+      const wx = Math.sin(time * 1.9 + bx * 0.7 + bz * 0.3) * amp;
+      const wz = Math.sin(time * 1.4 + bz * 0.8 - bx * 0.2) * 0.6 * amp;
+      const tip = [bx + (r4 - 0.5) * h * 0.5 + wx, y + h, bz + (r3 - 0.5) * h * 0.5 + wz];
+      const u = u0 + UV_EPS + r1 * (s - 2 * UV_EPS), v = v0 + UV_EPS + r2 * (s - 2 * UV_EPS);
+      for (const [p, shade] of [[[bx - sx, y, bz - sz], 0.7], [[bx + sx, y, bz + sz], 0.7], [tip, 1.15]]) {
+        out.set([p[0], p[1], p[2], 0, 1, 0, u, v, TINT.grass[0] * shade, TINT.grass[1] * shade, TINT.grass[2] * shade, 1, bl, sky, 5, 1], o);
+        o += 16;
+      }
+    }
+  }
+  return out;
 }
 
 // --------------------------------------------------------------- shaders
@@ -663,6 +700,8 @@ export class Preview {
       opaque: this.makeMesh(scene.opaque),
       water: this.makeMesh(scene.water),
     };
+    this.grassTops = scene.grassTops;
+    this.grassCfg = null;
     this.emptyVao = gl.createVertexArray();
     this.sky = link(gl, FULLSCREEN_VS, SKY_FS);
     this.copy = link(gl, FULLSCREEN_VS, COPY_FS);
@@ -744,6 +783,24 @@ export class Preview {
       gl.deleteBuffer(this.heldModel.mesh.buf);
     }
     this.heldModel = data && data.length ? { mesh: this.makeMesh(data), hand } : null;
+  }
+
+  // 3D grass (the pack-wide setting): blades on the grass blocks.
+  setGrass(cfg) {
+    this.grassCfg = cfg && cfg.on ? { ...cfg } : null;
+    if (!this.grassCfg) this.swapMesh('grassMesh', null);
+  }
+
+  updateGrass(time) {
+    if (!this.grassCfg) return;
+    const data = buildGrassBlades(this.grassTops, this.grassCfg, time, this.rain || 0);
+    const gl = this.gl;
+    if (!this.grassMesh || this.grassMesh.count !== data.length / 16) {
+      this.swapMesh('grassMesh', data);
+    } else {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.grassMesh.buf);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, data);
+    }
   }
 
   // A mob model from the Models tab, drawn in place of the preview zombie,
@@ -986,6 +1043,13 @@ export class Preview {
     if (this.meshes.model) {
       gl.bindVertexArray(this.meshes.model.vao);
       gl.drawArrays(gl.TRIANGLES, 0, this.meshes.model.count);
+    }
+    if (this.grassCfg) {
+      this.updateGrass(time);
+      if (this.grassMesh) {
+        gl.bindVertexArray(this.grassMesh.vao);
+        gl.drawArrays(gl.TRIANGLES, 0, this.grassMesh.count);
+      }
     }
 
     // block entities and mobs (Items & Entities graph)

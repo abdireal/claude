@@ -60,6 +60,12 @@ The **Shiny Weapons** preset shows it off: swords, tools, armour and shields are
 
 Lit outputs write their normal and smoothness to `colortex1`, the reflection strength to `colortex2` and the sky they reflected to `colortex3`. The Post FX graph now runs in `composite1`.
 
+## 3D grass
+
+Turn on **3D grass** in the Graph panel (under Shadows) and the shader pack gets a geometry shader, `gbuffers_terrain.gsh`, that grows low-poly blades on every grass block near the player: one triangle each, turned towards the camera, coloured by the grass texture and the biome, swaying in the wind (more in rain). No mod needed. Blades, height, wind and distance become a *3D Grass* page in Iris → Shader Settings, where players can also turn it off. The preview grows the same blades.
+
+With the Models mod there are also two low-poly samples under Models → New: a grass tuft that replaces short grass, and a grass block with blades on top. Their blades take the biome colour (*Biome tint* on a material) and sway with the Blocks graph's wind: Block Type → Wave Mask now bends plants from the root and moves model parts that stick out above a grass block, while the block itself stays still. Block Type also has *Grass Block* and *Height in Block* outputs.
+
 ## Shadows
 
 | Setting | Iris option | What it does |

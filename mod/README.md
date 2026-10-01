@@ -66,6 +66,7 @@ BlockGraph writes all of this for you.
 | `flip_v` | OBJ textures start at the bottom, Minecraft's at the top. `true` (default) flips V. |
 | `materials` | OBJ material name to texture slot, e.g. `{ "Material.001": "blade" }`. |
 | `emissive` | OBJ materials drawn at full brightness. |
+| `tint` | OBJ materials coloured like the block's own tint, for example grass and leaves by biome (tint index 0). `true` tints every material. For the item, add `"tints"` to the item model definition as usual. |
 | `render_layer` | `solid`, `cutout` or `translucent` for block models. Default: the block's own layer. |
 | `transform` | `{ "scale": 1, "rotation": [x, y, z], "translation": [x, y, z] }` in blocks and degrees, around the block centre. |
 

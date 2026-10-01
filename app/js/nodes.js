@@ -131,22 +131,26 @@ def({
 
 def({
   type: 'blockType', title: 'Block Type', cat: 'Input', graphs: ['terrain'],
-  desc: 'Masks that are 1 on certain blocks. Wave Mask covers leaves and the top half of plants, ready for waving. Custom Models is 1 on blocks that use a 3D model from the Models tab.',
-  keywords: 'mc_Entity block id leaves plants foliage water mask model mesh obj custom',
+  desc: 'Masks that are 1 on certain blocks. Wave Mask covers leaves, plants (more towards the top, so low-poly grass bends from its root) and parts of 3D models that stick out above a grass block or a model block, ready for waving. Custom Models is 1 on blocks that use a 3D model from the Models tab. Height in Block is 0 at the bottom of the block and 1 at the top.',
+  keywords: 'mc_Entity block id leaves plants foliage water mask model mesh obj custom grass height',
   outputs: [
     { id: 'wave', name: 'Wave Mask', type: 'float' },
     { id: 'leaves', name: 'Leaves', type: 'float' },
     { id: 'plants', name: 'Plants', type: 'float' },
     { id: 'water', name: 'Water', type: 'float' },
+    { id: 'grass', name: 'Grass Block', type: 'float' },
     { id: 'model', name: 'Custom Models', type: 'float' },
+    { id: 'height', name: 'Height in Block', type: 'float' },
   ],
   gen: () => ({
     out: {
-      wave: 'clamp(bg_isLeaves + bg_isPlant * bg_plantTop, 0.0, 1.0)',
+      wave: 'clamp(bg_isLeaves + bg_isPlant * bg_plantTop + (bg_isGrass + bg_isModel) * clamp((bg_blockHeight - 1.0) * 2.5, 0.0, 1.0), 0.0, 1.0)',
       leaves: 'bg_isLeaves',
       plants: 'bg_isPlant',
       water: 'bg_isWater',
+      grass: 'bg_isGrass',
       model: 'bg_isModel',
+      height: 'bg_blockHeight',
     },
   }),
 });

@@ -92,10 +92,11 @@ const ITEM_NOTES = {
   elytra: 'Only the item changes. Elytra on a player’s back are drawn separately.',
   shield: 'Pick “Shield” under Hold like, so it raises when you block.',
 };
-const BLOCKS = ['chest', 'trapped_chest', 'ender_chest', 'oak_sign', 'oak_wall_sign', 'red_bed', 'white_banner', 'player_head', 'skeleton_skull',
+const BLOCKS = ['short_grass', 'tall_grass', 'chest', 'trapped_chest', 'ender_chest', 'oak_sign', 'oak_wall_sign', 'red_bed', 'white_banner', 'player_head', 'skeleton_skull',
   'stone', 'dirt', 'grass_block', 'oak_planks', 'cobblestone', 'flower_pot', 'lantern', 'soul_lantern', 'end_rod', 'lightning_rod', 'anvil', 'cauldron', 'grindstone',
   'stonecutter', 'brewing_stand', 'hopper', 'composter', 'dead_bush', 'cobweb', 'candle', 'amethyst_cluster', 'sea_pickle',
   'iron_bars', 'campfire', 'lectern', 'scaffolding', 'pointed_dripstone', 'small_amethyst_bud', 'fern', 'poppy'];
+const PLANT_BLOCKS = /^(short_grass|tall_grass|fern|large_fern|dead_bush|.*_sapling|dandelion|poppy|blue_orchid|allium|azure_bluet|.*_tulip|oxeye_daisy|cornflower|lily_of_the_valley|wheat|carrots|potatoes|beetroots|sugar_cane|short_dry_grass|tall_dry_grass|bush)$/;
 const ENTITY_BLOCKS = /^(chest|trapped_chest|ender_chest|.*shulker_box|.*_bed|.*sign|.*banner|.*_head|.*_skull|bell|decorated_pot|conduit|beacon|enchanting_table)$/;
 const FULL_BLOCKS = /^(stone|dirt|grass_block|cobblestone|.*_planks|.*_log|.*_wood|sand|gravel|.*_ore|.*_block|glass|bricks|.*_bricks|deepslate|netherrack|obsidian|.*_wool|.*_concrete|.*terracotta|glowstone|sandstone|.*leaves)$/;
 
@@ -106,6 +107,7 @@ const norms = new Map();
 const quadCounts = new Map();
 const shownTiles = new Set();
 const shownPbr = new Map(); // preview tile -> what its material maps show
+const GRASS_TINT = [0.57, 0.74, 0.35]; // the preview's plains grass colour
 const decodedMaps = new Map(); // "meshId:material" -> { n, s } pixels, or 'pending'
 
 // ------------------------------------------------------------- storage
@@ -375,7 +377,7 @@ function withPaletteUVs(mesh) {
 
 // --------------------------------------------------------------- create
 
-function addModel(mesh, { name, use = 'custom', target = '', base = 'minecraft:stick', hold = 'item', texFor = [], glowFor = [], surfaceFor = [] }) {
+function addModel(mesh, { name, use = 'custom', target = '', base = 'minecraft:stick', hold = 'item', texFor = [], glowFor = [], surfaceFor = [], fit = null, turn = 'none' }) {
   const meshId = newMeshId();
   storeMesh(meshId, mesh);
   const model = {
@@ -388,9 +390,10 @@ function addModel(mesh, { name, use = 'custom', target = '', base = 'minecraft:s
     hold,
     facing: false,
     fit: { ...M.DEFAULT_FIT, r: [0, 0, 0], t: [0, 0, 0] },
-    mats: mesh.materials.map((m, i) => ({ name: m.name, tex: texFor[i] || '', glow: !!(glowFor[i] ?? m.glow), surface: surfaceFor[i] || (m.maps ? 'file' : 'matte') })),
+    turn,
+    mats: mesh.materials.map((m, i) => ({ name: m.name, tex: texFor[i] || '', glow: !!(glowFor[i] ?? m.glow), tint: !!m.tint, surface: surfaceFor[i] || (m.maps ? 'file' : 'matte') })),
   };
-  model.fit = poseFit(model, mesh);
+  model.fit = fit || poseFit(model, mesh);
   ctx.state.models.push(model);
   ctx.state.modelSel = model.id;
   return model;
@@ -421,7 +424,16 @@ function addSampleTextures(textures, modelName) {
 }
 
 export function addSample(kind) {
-  if (kind === 'crystal') {
+  if (kind === 'grass' || kind === 'grassBlock') {
+    // Made in block units, so they keep their size: blades sway from the root in game.
+    const s = kind === 'grass' ? M.sampleGrassTuft() : M.sampleGrassBlock();
+    const tex = addSampleTextures(s.textures, kind === 'grass' ? 'Grass' : 'Grass block');
+    addModel(s.mesh, {
+      name: kind === 'grass' ? 'Low-poly grass' : 'Low-poly grass block', use: 'block',
+      target: kind === 'grass' ? 'minecraft:short_grass' : 'minecraft:grass_block', hold: 'block',
+      texFor: s.mesh.materials.map(() => tex[0]), fit: M.identityFit(s.mesh),
+    });
+  } else if (kind === 'crystal') {
     const s = M.sampleCrystal();
     const tex = addSampleTextures(s.textures, 'Crystal');
     addModel(s.mesh, { name: 'Crystal', use: 'block', target: 'minecraft:flower_pot', hold: 'block', texFor: [tex[0], tex[0]], surfaceFor: ['gem', 'gem'] });
@@ -683,12 +695,16 @@ function updatePreview() {
   const [blockLight, sky] = held || worn ? [0, 1] : sceneLight(...centre);
   const tris = pm.mat.length;
   const data = new Float32Array(tris * 3 * 16);
+  // Like block.properties in the pack: plants wave, grass blocks wave above their top, others are Custom Models.
+  const tpath = (fullId(m.target) || '').replace(/^minecraft:/, '');
+  const blockKind = PLANT_BLOCKS.test(tpath) ? 2 : tpath === 'grass_block' ? 5 : 4;
   let o = 0;
   for (let t = 0; t < tris; t++) {
     const mi = pm.mat[t];
     const mat = mats[mi] || {};
     const tile = mat.img ? tileOfTex.get(m.mats[mi].tex) : whiteTile;
-    const tint = mat.img ? [1, 1, 1] : mat.color || [0.8, 0.8, 0.8];
+    // Biome-tinted materials (grass) get the preview's grass colour, as in game.
+    const tint = mat.img ? (m.mats[mi].tint ? GRASS_TINT : [1, 1, 1]) : mat.color || [0.8, 0.8, 0.8];
     const ids = [pm.idx[t * 3], pm.idx[t * 3 + 1], pm.idx[t * 3 + 2]];
     let fn = null;
     if (!pm.nrm) {
@@ -707,7 +723,7 @@ function updatePreview() {
         pm.pos[i * 3] + at[0], pm.pos[i * 3 + 1] + at[1], pm.pos[i * 3 + 2] + at[2],
         n[0], n[1], n[2], uv[0], uv[1],
         tint[0] * shade, tint[1] * shade, tint[2] * shade, 1,
-        mat.glow ? 1 : blockLight, sky, held || worn ? 0 : 4, 0,
+        mat.glow ? 1 : blockLight, sky, held || worn ? 0 : blockKind, held || worn ? 0 : pm.pos[i * 3 + 1],
       ], o);
       o += 16;
     }
@@ -1190,6 +1206,14 @@ function renderProps() {
       sw.append(cb, el('span', 'switch'), el('span', null, 'Glow'));
       sw.title = 'Full brightness, even in the dark (lamps, crystals, runes)';
       side.append(sw);
+      const tw = el('label', 'ctl-switch small');
+      const tb = el('input');
+      tb.type = 'checkbox';
+      tb.checked = !!mat.tint;
+      tb.addEventListener('change', () => { mat.tint = tb.checked; commit(); });
+      tw.append(tb, el('span', 'switch'), el('span', null, 'Biome tint'));
+      tw.title = 'Coloured by the biome like vanilla grass and leaves. Paint the texture light grey-green; the game adds the colour.';
+      side.append(tw);
       if (mat.tex && TX.texById(mat.tex)) {
         const paint = el('button', 'btn ghost small', 'Paint');
         paint.type = 'button';
@@ -1349,6 +1373,7 @@ export async function modelPackFiles(ns) {
     const obj = M.meshToObj(mesh, matrixOf(m), slots, m.name);
     files[`assets/${ns}/models/${dir}/${key}.obj`] = obj.text;
     const glow = slots.filter((_, i) => m.mats[i].glow);
+    const tinted = slots.filter((_, i) => m.mats[i].tint);
     // Without the mod this file loads as a plain vanilla model ("optional"
     // tells Fabric API to allow that), so it carries a fallback the mod
     // ignores: the item's own sprite for items, a textured box otherwise.
@@ -1366,10 +1391,16 @@ export async function modelPackFiles(ns) {
     } else {
       model.elements = [fallbackBox(obj.bounds)];
     }
-    if (glow.length) model.blockgraph = { emissive: glow };
+    if (glow.length || tinted.length) {
+      model.blockgraph = {};
+      if (glow.length) model.blockgraph.emissive = glow;
+      if (tinted.length) model.blockgraph.tint = tinted; // biome colour, tint index 0
+    }
     files[`assets/${ns}/models/${dir}/${key}.json`] = json(model);
     const ref = `${ns}:${dir}/${key}`;
     let itemModel = { type: 'minecraft:model', model: ref };
+    // As an item (in the hand or inventory) a tinted model takes the plains grass colour.
+    if (tinted.length) itemModel.tints = [{ type: 'minecraft:grass', temperature: 0.5, downfall: 1.0 }];
     if (m.use !== 'block' && m.hold === 'shield') {
       files[`assets/${ns}/models/${dir}/${key}_blocking.json`] = json({ ...model, parent: hold.blocking });
       itemModel = { type: 'minecraft:condition', property: 'minecraft:using_item', on_false: itemModel, on_true: { type: 'minecraft:model', model: `${ref}_blocking` } };
@@ -1543,6 +1574,8 @@ export async function initModels(context) {
     ['sting', 'Sting', 'Bilbo\u2019s sword with its blue inscription, replacing the netherite sword. About 1,100 triangles.'],
     ['sword', 'Sample: Sword', 'A low-poly sword that replaces the diamond sword.'],
     ['crystal', 'Sample: Crystal cluster', 'Glowing crystals that replace the flower pot block.'],
+    ['grass', 'Sample: Low-poly grass', 'A tuft of triangle blades that replaces short grass. Sways from the root, takes the biome colour.'],
+    ['grassBlock', 'Sample: Low-poly grass block', 'A grass block with low-poly blades on top. The block stays still, the blades sway.'],
   ];
   const runSample = async (k) => {
     try {

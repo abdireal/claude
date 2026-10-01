@@ -128,6 +128,10 @@ public record ObjGeometry(Identifier location, ObjOptions options) implements Un
 				emitter.emissive(true);
 			}
 
+			if (options.isTinted(face.material())) {
+				emitter.tintIndex(0); // the block's or item's tint, like vanilla grass with "tintindex": 0
+			}
+
 			if (options.renderLayer() != null) {
 				emitter.renderLayer(options.renderLayer());
 			}

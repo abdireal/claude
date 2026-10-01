@@ -893,3 +893,87 @@ export function mobScale(mesh, height) {
   const b = bounds(mesh.pos);
   return Math.round((height * Math.max(...b.size) / (b.size[1] || 1)) * 1e4) / 1e4;
 }
+
+// ------------------------------------------------------------ grass samples
+// Low-poly grass in block units (0..1 is the block). Each blade is one
+// triangle, drawn from both sides, with its root at the bottom of the
+// texture (V = 1) and its tip at the top (V = 0). The "blades" material is
+// tinted by the biome in game, so its texture is a light green-grey.
+
+function blade(b, mat, base, h, w, yaw, lean, uvx) {
+  const cx = Math.cos(yaw) * w, cz = Math.sin(yaw) * w;
+  const tip = [base[0] + Math.cos(yaw + Math.PI / 2) * lean, base[1] + h, base[2] + Math.sin(yaw + Math.PI / 2) * lean];
+  const l = [base[0] - cx, base[1], base[2] - cz], r = [base[0] + cx, base[1], base[2] + cz];
+  const n = faceNormal(l, r, tip);
+  const back = n.map((v) => -v);
+  const uv = [[uvx - 0.06, 1], [uvx + 0.06, 1], [uvx, 0]];
+  const f = [l, r, tip].map((p, i) => b.vertex(p, uv[i], n));
+  b.tri(f[0], f[1], f[2], mat);
+  const k = [l, r, tip].map((p, i) => b.vertex(p, uv[i], back));
+  b.tri(k[1], k[0], k[2], mat);
+}
+
+function bladeTexture(size = 16) {
+  return canvasBytes(size, (x, y) => {
+    const g = y / (size - 1); // 0 at the tip, 1 at the root
+    const n = hash2(x * 7, y * 3) * 18;
+    return [205 - g * 75 + n, 225 - g * 70 + n, 185 - g * 80 + n];
+  });
+}
+
+// A tuft of 11 blades: replaces short grass, sways from its root.
+export function sampleGrassTuft() {
+  const b = meshBuilder();
+  for (let i = 0; i < 11; i++) {
+    const a = (i / 11) * Math.PI * 2 + hash2(i, 3) * 0.6;
+    const d = 0.08 + hash2(i, 7) * 0.24;
+    const base = [0.5 + Math.cos(a) * d, 0, 0.5 + Math.sin(a) * d];
+    const h = 0.42 + hash2(i, 11) * 0.42;
+    blade(b, 0, base, h, 0.045 + hash2(i, 13) * 0.02, a + Math.PI / 2 + (hash2(i, 17) - 0.5), 0.06 + d * 0.5, 0.2 + hash2(i, 19) * 0.6);
+  }
+  const mesh = b.build([{ name: 'blades', color: [0.45, 0.68, 0.3], image: 0, tint: true }]);
+  return { mesh, textures: [{ name: 'Grass blades', ...bladeTexture() }] };
+}
+
+// A grass block with a low-poly tuft field on top. The cube is still a cube
+// (dirt sides, grass top); only the blades sway.
+export function sampleGrassBlock() {
+  const b = meshBuilder();
+  // texture: left half grass (tinted), right half dirt side with a green rim
+  const tex = canvasBytes(32, (x, y) => {
+    const n = hash2(x * 5, y * 9);
+    if (x < 16) { const v = 170 + n * 50; return [v, v + 12, v - 18]; }
+    if (y < 3 + (hash2(x, 1) > 0.5 ? 1 : 0)) return [96 + n * 30, 140 + n * 30, 60 + n * 20];
+    return [118 + n * 30, 84 + n * 22, 58 + n * 18];
+  });
+  const quad = (mat, corners, n, uvs) => {
+    const ids = corners.map((p, i) => b.vertex(p, uvs[i], n));
+    b.tri(ids[0], ids[1], ids[2], mat);
+    b.tri(ids[0], ids[2], ids[3], mat);
+  };
+  const L = 0.5, R = 0.98;
+  const side = [[R, 0], [R, 1], [L + 0.02, 1], [L + 0.02, 0]];
+  quad(1, [[0, 1, 1], [0, 0, 1], [1, 0, 1], [1, 1, 1]], [0, 0, 1], side.map(([u, v]) => [u, v * 0.98 + 0.01]));
+  quad(1, [[1, 1, 0], [1, 0, 0], [0, 0, 0], [0, 1, 0]], [0, 0, -1], side);
+  quad(1, [[1, 1, 1], [1, 0, 1], [1, 0, 0], [1, 1, 0]], [1, 0, 0], side);
+  quad(1, [[0, 1, 0], [0, 0, 0], [0, 0, 1], [0, 1, 1]], [-1, 0, 0], side);
+  quad(1, [[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], [0, -1, 0], [[0.6, 0.6], [0.9, 0.6], [0.9, 0.9], [0.6, 0.9]]);
+  quad(0, [[0, 1, 1], [1, 1, 1], [1, 1, 0], [0, 1, 0]], [0, 1, 0], [[0.02, 0.98], [0.48, 0.98], [0.48, 0.02], [0.02, 0.02]]);
+  for (let i = 0; i < 14; i++) {
+    const base = [0.08 + hash2(i, 21) * 0.84, 1, 0.08 + hash2(i, 23) * 0.84];
+    const h = 0.18 + hash2(i, 29) * 0.22;
+    blade(b, 0, base, h, 0.035 + hash2(i, 31) * 0.015, hash2(i, 37) * Math.PI, 0.03 + hash2(i, 41) * 0.05, 0.12 + hash2(i, 43) * 0.25);
+  }
+  const mesh = b.build([
+    { name: 'grass', color: [0.45, 0.68, 0.3], image: 0, tint: true },
+    { name: 'dirt', color: [0.5, 0.36, 0.25], image: 0 },
+  ]);
+  return { mesh, textures: [{ name: 'Grass block', ...tex }] };
+}
+
+// The fit that keeps a mesh made in block units exactly where it is.
+export function identityFit(mesh) {
+  const b = bounds(mesh.pos);
+  const c = [0, 1, 2].map((k) => (b.min[k] + b.max[k]) / 2);
+  return { s: Math.max(...b.size), r: [0, 0, 0], t: [c[0] - 0.5, c[1] - 0.5, c[2] - 0.5] };
+}
