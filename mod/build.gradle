@@ -68,7 +68,7 @@ tasks.register('gametestJar', Jar) {
 
 tasks.register('remapGametestJar', net.fabricmc.loom.task.RemapJarTask) {
 	dependsOn gametestJar
-	input = gametestJar.archiveFile
+	input = tasks.named('gametestJar').flatMap { it.archiveFile }
 	destinationDirectory = layout.buildDirectory.dir('gametest-libs')
 	archiveClassifier = 'gametest'
 	addNestedDependencies = false
@@ -80,7 +80,7 @@ tasks.register('remapGametestJar', net.fabricmc.loom.task.RemapJarTask) {
 // example Sodium and Iris) are added too.
 tasks.register('runProductionClientGameTest', net.fabricmc.loom.task.prod.ClientProductionRunTask) {
 	mods.from(configurations.productionMods)
-	mods.from(remapJar.archiveFile, remapGametestJar.archiveFile)
+	mods.from(remapJar.archiveFile, tasks.named('remapGametestJar').flatMap { it.archiveFile })
 	mods.from(fileTree('extra-mods') { include '*.jar' })
 	jvmArgs.addAll([
 		'-Dfabric.client.gametest',

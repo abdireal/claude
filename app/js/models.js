@@ -1051,16 +1051,19 @@ export async function modelPackFiles(ns) {
         textures[slots[i]] = 'minecraft:block/white_concrete';
         continue;
       }
-      const tk = `${dir}:${mat.tex}`;
-      if (!texKeys.has(tk)) {
+      // Model textures always go to textures/block/, item models too. Since
+      // 1.21.11 textures/item/ is a separate item atlas, and Sodium draws
+      // mesh items with the block atlas, so item-atlas UVs would show
+      // whatever block texture sits at the same spot (grass, leaves, wood).
+      if (!texKeys.has(mat.tex)) {
         let k = slug(TX.texById(mat.tex)?.name || key), n = 2;
         const base = k;
-        while (usedTexKeys.has(`${dir}/${k}`)) k = `${base}_${n++}`;
-        usedTexKeys.add(`${dir}/${k}`);
-        texKeys.set(tk, k);
-        files[`assets/${ns}/textures/${dir}/${k}.png`] = await TX.imageDataToPng(img);
+        while (usedTexKeys.has(k)) k = `${base}_${n++}`;
+        usedTexKeys.add(k);
+        texKeys.set(mat.tex, k);
+        files[`assets/${ns}/textures/block/${k}.png`] = await TX.imageDataToPng(img);
       }
-      textures[slots[i]] = `${ns}:${dir}/${texKeys.get(tk)}`;
+      textures[slots[i]] = `${ns}:block/${texKeys.get(mat.tex)}`;
     }
     textures.particle = textures[slots[0]] || 'minecraft:block/white_concrete';
     const obj = M.meshToObj(mesh, matrixOf(m), slots, m.name);
