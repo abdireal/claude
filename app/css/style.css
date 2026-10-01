@@ -45,6 +45,16 @@
   --c-pattern: #6750b3;
   --c-effect: #b3552d;
   --c-output: #c2851a;
+  --c-trig: #2f6fa0;
+  --c-logic: #7a4f9e;
+  --c-normal: #3f7fbf;
+  --c-uv: #2d8f5e;
+  --c-utility: #5d5f6b;
+
+  /* Sticky notes stay paper-yellow in both themes. */
+  --note-bg: #f6e7a1;
+  --note-head: #e9d06a;
+  --note-ink: #3b3112;
 
   /* The Iris settings mock imitates Minecraft's own buttons, so it keeps one look in both themes. */
   --mc-btn: #3d3d3d;
@@ -329,14 +339,28 @@ svg { flex: none; }
   background: var(--bg);
 }
 .lib-list { flex: 1; overflow-y: auto; padding: 0 10px 12px; }
-.lib-cat h3 {
+.lib-cat h3 { padding: 8px 0 2px; }
+.lib-cat-toggle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.09em;
   color: var(--fg-3);
-  padding: 14px 6px 6px;
+  cursor: pointer;
+  text-align: left;
 }
+.lib-cat-toggle:hover { color: var(--fg); background: var(--surface-2); }
+.lib-caret { width: 0; height: 0; border-left: 4px solid currentColor; border-top: 4px solid transparent; border-bottom: 4px solid transparent; transition: transform 0.12s; }
+.lib-cat-toggle[aria-expanded="true"] .lib-caret { transform: rotate(90deg); }
+.lib-count { margin-left: auto; font-family: var(--font-mono); font-size: 10.5px; letter-spacing: 0; font-weight: 500; }
 .lib-items { display: grid; gap: 1px; }
 .lib-item {
   display: flex;
@@ -375,6 +399,11 @@ svg { flex: none; }
 .cat-pattern { --cat: var(--c-pattern); }
 .cat-effect { --cat: var(--c-effect); }
 .cat-output { --cat: var(--c-output); }
+.cat-trig { --cat: var(--c-trig); }
+.cat-logic { --cat: var(--c-logic); }
+.cat-normal { --cat: var(--c-normal); }
+.cat-uv { --cat: var(--c-uv); }
+.cat-utility { --cat: var(--c-utility); }
 
 .t-float { --tc: var(--t-float); }
 .t-vec2 { --tc: var(--t-vec2); }
@@ -638,6 +667,26 @@ svg { flex: none; }
 .tips li { display: grid; grid-template-columns: 96px minmax(0, 1fr); gap: 10px; font-size: 12.5px; }
 .tips strong { font-weight: 600; }
 .tips span { color: var(--fg-2); }
+
+/* Node previews, notes and new controls */
+.node-preview { display: block; width: 100%; height: auto; aspect-ratio: 160 / 96; border-top: 1px solid var(--node-line); border-radius: 0 0 calc(var(--r-md) - 1px) calc(var(--r-md) - 1px); background: #15171c; image-rendering: auto; }
+.node.note { background: var(--note-bg); border-color: color-mix(in srgb, var(--note-head) 70%, black); color: var(--note-ink); }
+.node.note .node-head { background: var(--note-head); color: var(--note-ink); box-shadow: none; height: 26px; font-size: 12px; }
+.note-text { display: block; width: 100%; min-height: 84px; resize: vertical; border: 0; background: transparent; color: var(--note-ink); padding: 8px 12px 12px; font: 13px/1.4 var(--font-body); }
+.note-text:focus { outline: none; }
+.ctl-gradient { height: 14px; border-radius: 4px; border: 1px solid var(--line-strong); }
+.ctl-gradient.big { height: 24px; border-radius: 6px; }
+.ctl-code { display: block; font-family: var(--font-mono); font-size: 10.5px; color: var(--fg-2); background: var(--surface-2); border: 1px solid var(--line); border-radius: 5px; padding: 4px 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.in-code { width: 100%; padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--canvas); color: var(--fg); font-size: 12.5px; line-height: 1.5; resize: vertical; tab-size: 2; }
+.mono { font-family: var(--font-mono); }
+pre.insp-error { white-space: pre-wrap; font-size: 11.5px; margin: 0; }
+.grad-editor { display: grid; gap: 6px; }
+.grad-row { display: grid; grid-template-columns: 44px minmax(0, 1fr) 28px; gap: 6px; align-items: center; }
+.hud-right { display: flex; align-items: flex-start; gap: 8px; pointer-events: auto; flex: none; }
+.hud-btn { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 11px; border: 1px solid var(--line-strong); border-radius: var(--r-sm); background: var(--surface); color: var(--fg-2); font-size: 12.5px; cursor: pointer; }
+.hud-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.hud-btn:hover { background: var(--surface-3); color: var(--fg); }
+.hud-btn.on { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: var(--accent-soft); }
 
 /* Iris settings mock: Minecraft-style buttons */
 .iris-menu {

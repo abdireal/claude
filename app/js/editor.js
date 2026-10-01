@@ -2,8 +2,9 @@
 // panning, zooming and selection. It edits the graph object it was given and
 // reports every change back to the app.
 
-import { NODE_DEFS, BINDS, rgbToHex, hexToLinear } from './nodes.js';
+import { NODE_DEFS, BINDS, rgbToHex, hexToLinear, normStops, swizzleMask } from './nodes.js';
 import { inferTypes, defaultParams } from './codegen.js';
+import { previewableNode, choiceOptions, choiceIndex } from './targets.js';
 
 export const HEAD = 34;
 export const ROW = 26;
@@ -233,6 +234,33 @@ export class GraphEditor {
     if (animate) setTimeout(() => this.world.classList.remove('animate'), 260);
   }
 
+  // Pushes nodes down until none overlap. Used after loading a preset, since
+  // node previews make nodes taller than the preset layouts assume.
+  resolveOverlaps(gap = 20) {
+    const els = new Map([...this.layer.children].map((e) => [Number(e.dataset.id), e]));
+    const boxes = this.graph.nodes.map((n) => ({ n, w: nodeWidth(n), h: els.get(n.id)?.offsetHeight || 100 }));
+    boxes.sort((a, b) => a.n.y - b.n.y || a.n.x - b.n.x);
+    let moved = false;
+    for (let i = 0; i < boxes.length; i++) {
+      const b = boxes[i];
+      for (let pass = 0; pass < boxes.length; pass++) {
+        let bumped = false;
+        for (let j = 0; j < i; j++) {
+          const a = boxes[j];
+          const xOverlap = a.n.x < b.n.x + b.w + 8 && b.n.x < a.n.x + a.w + 8;
+          const yOverlap = b.n.y < a.n.y + a.h + gap && b.n.y + b.h > a.n.y;
+          if (xOverlap && yOverlap) {
+            b.n.y = Math.round(a.n.y + a.h + gap);
+            bumped = moved = true;
+          }
+        }
+        if (!bumped) break;
+      }
+    }
+    if (moved) this.updateNodePositions(this.graph.nodes.map((n) => n.id));
+    return moved;
+  }
+
   zoomBy(f, cx, cy) {
     const r = this.root.getBoundingClientRect();
     const mx = cx ?? r.width / 2;
@@ -255,6 +283,7 @@ export class GraphEditor {
     for (const n of this.graph.nodes) this.layer.append(this.renderNode(n));
     this.renderLinks();
     this.setErrors([...this.errorNodes].map(([node, msg]) => ({ node, msg })));
+    this.opts.onRendered?.();
   }
 
   renderNode(n) {
@@ -268,6 +297,8 @@ export class GraphEditor {
     if (def?.isOutput) box.classList.add('is-output');
     box.setAttribute('role', 'group');
     box.setAttribute('aria-label', def ? def.title : n.type);
+
+    if (def?.isNote) return this.renderNote(n, box);
 
     const head = el('div', 'node-head');
     const title = el('span', 'node-title', def ? def.title : `Unknown: ${n.type}`);
@@ -306,6 +337,30 @@ export class GraphEditor {
 
     const controls = this.renderControls(n, def);
     if (controls) box.append(controls);
+    if (this.opts.showPreviews?.() && previewableNode(def)) {
+      const c = el('canvas', 'node-preview');
+      c.width = 160;
+      c.height = 96;
+      c.setAttribute('aria-hidden', 'true');
+      box.append(c);
+    }
+    return box;
+  }
+
+  renderNote(n, box) {
+    box.classList.add('note');
+    const head = el('div', 'node-head');
+    head.append(el('span', 'node-title', 'Note'));
+    const ta = el('textarea', 'note-text');
+    ta.value = n.params?.text ?? '';
+    ta.rows = 4;
+    ta.setAttribute('aria-label', 'Sticky note text');
+    ta.addEventListener('change', () => {
+      n.params = n.params || {};
+      n.params.text = ta.value;
+      this.opts.onChange?.({ structural: false, commit: true, moved: true });
+    });
+    box.append(head, ta);
     return box;
   }
 
@@ -383,6 +438,24 @@ export class GraphEditor {
       wrap.append(label, range);
       return wrap;
     }
+    if (def.setting === 'choice') {
+      const s = el('select', 'ctl-select');
+      s.setAttribute('aria-label', P.label || P.name);
+      choiceOptions(P).forEach((o, i) => {
+        const opt = el('option', null, o);
+        opt.value = String(i);
+        s.append(opt);
+      });
+      s.value = String(choiceIndex(P));
+      s.addEventListener('change', () => {
+        n.params.value = Number(s.value);
+        commit(false);
+      });
+      const id = el('div', 'ctl-setting');
+      id.append(el('span', 'ctl-id', P.name));
+      wrap.append(id, s);
+      return wrap;
+    }
     if (def.setting === 'toggle') {
       const row = el('label', 'ctl-switch');
       const cb = el('input');
@@ -450,6 +523,36 @@ export class GraphEditor {
         });
         row.append(cb, el('span', 'switch'), el('span', null, p.name));
         wrap.append(row);
+      } else if (p.kind === 'swizzle') {
+        const input = el('input', 'ctl-num');
+        input.value = P[p.id];
+        input.maxLength = 4;
+        input.spellcheck = false;
+        input.setAttribute('aria-label', p.name);
+        input.addEventListener('change', () => {
+          n.params[p.id] = swizzleMask(input.value);
+          input.value = n.params[p.id];
+          this.changed(true);
+          this.opts.onChange?.({ structural: true, commit: true });
+        });
+        const row = el('label', 'ctl-select-row');
+        row.append(el('span', null, p.name), input);
+        wrap.append(row);
+      } else if (p.kind === 'gradient') {
+        const stops = normStops(P[p.id]);
+        const strip = el('div', 'ctl-gradient');
+        const hard = (P.mode === 'fixed');
+        strip.style.background = `linear-gradient(90deg, ${stops.map((st, i) => {
+          if (!hard || i === 0) return `${st.c} ${st.t * 100}%`;
+          return `${stops[i - 1].c} ${st.t * 100}%, ${st.c} ${st.t * 100}%`;
+        }).join(', ')})`;
+        strip.title = 'Edit the stops in the inspector';
+        wrap.append(strip);
+      } else if (p.kind === 'code') {
+        const first = String(P[p.id] || '').split('\n').find((l) => l.trim() && !l.trim().startsWith('//')) || '';
+        const code = el('code', 'ctl-code', first || '(empty)');
+        code.title = 'Edit the code in the inspector';
+        wrap.append(code);
       }
     }
     return wrap.children.length ? wrap : null;

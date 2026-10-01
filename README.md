@@ -7,11 +7,14 @@ It works like Unity Shader Graph: every node is a small piece of GLSL, and the g
 ## What you get
 
 - **Two graphs.** *Blocks* runs on every block (exports to `gbuffers_terrain` and `gbuffers_water`). *Post FX* runs on the finished screen image (exports to `composite`).
-- **About 45 nodes.** Block texture, biome tint, light, block type masks, time, day and weather, noise, waves, wind sway, maths, colour tools, and screen effects like vignette, pixelate, chromatic aberration, scanlines, blur, glow, depth fog and film grain.
+- **About 140 nodes, following Unity Shader Graph's library.** Inputs (block texture and LOD, biome tint, light, block type masks, face UV, view direction, screen position, sun and sky, camera, time and weather), Math (basic, advanced, range, round, interpolation, derivatives, random), Trigonometry and waves, Vector and channel (cross, projection, reflection, refract, rotate about axis, sphere mask, swizzle, flip, channel mask), Logic (branch, comparison, and, or, not), Artistic colour (blend with 21 modes, white balance, replace colour, colour mask, channel mixer, invert, colourspace conversion, dither, gradient, blackbody, metal reflectance), Normal (from height, strength, blend), UV (tiling and offset, rotate, twirl, polar, spherize, radial shear), Procedural (noise, gradient noise, Voronoi, checkerboard, ellipse, rectangle, rounded rectangle, polygon) and screen effects.
+- **Live preview on every node**, like Unity: a lit ball for block nodes, the real scene for Post FX nodes.
+- **Lit output.** The Block Output works like Unity's Master Stack: Color, Alpha, Normal, Smoothness, Metallic, Ambient Occlusion, Emission and Alpha Clip, with Vanilla or Lit (sun shading plus specular) lighting.
+- **Custom Function** for your own GLSL, **Sticky Notes**, **Reroute** nodes and collapsible library categories.
 - **Vertex Offset.** Wire anything into it to move blocks themselves, for waving leaves and plants or rolling water.
-- **In-game settings.** Slider Setting and On/Off Setting nodes become options in Iris → Shader Settings, with `shaders.properties` and language labels written for you.
+- **In-game settings.** Slider, On/Off and Dropdown Setting nodes become options in Iris → Shader Settings, with `shaders.properties` and language labels written for you.
 - **Live preview.** A small Minecraft-style scene in WebGL2 with procedural textures, day/night and rain controls.
-- **Presets.** Waving Plants, Toon World, Retro TV, Night Vision, Dreamy Glow, Ocean Waves and a blank start.
+- **Presets.** Waving Plants, Toon World, Retro TV, Night Vision, Dreamy Glow, Ocean Waves, Tiny Planet, Comic Outline, Lit & Bumpy and a blank start.
 - **View code.** See the exact GLSL each node produces.
 - Undo/redo, copy/paste, box select, autosave in the browser, and save/open graph files.
 
@@ -49,5 +52,6 @@ Generated shaders are written to be valid both as GLSL ES 3.00 (preview) and GLS
 ## Limits of this version
 
 - No shadows, reflections or volumetric light yet. Those need extra Iris passes.
+- Unity features with no Minecraft equivalent are left out: Sub Graphs, matrix nodes, texture and cubemap asset nodes, parallax mapping, object and reflection probe data.
 - Entities, sky, clouds and particles use simple vanilla-style shaders. The graphs cover blocks and the screen.
 - The preview imitates Minecraft lighting. In game, your resource pack and the real lightmap are used.

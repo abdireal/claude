@@ -11,10 +11,15 @@ export const CATEGORIES = [
   { id: 'Screen', label: 'Screen' },
   { id: 'Settings', label: 'Values & settings' },
   { id: 'Math', label: 'Math' },
-  { id: 'Vector', label: 'Vector' },
-  { id: 'Color', label: 'Color' },
-  { id: 'Pattern', label: 'Patterns & motion' },
+  { id: 'Trig', label: 'Trigonometry & waves' },
+  { id: 'Vector', label: 'Vector & channel' },
+  { id: 'Logic', label: 'Logic' },
+  { id: 'Color', label: 'Color (artistic)' },
+  { id: 'Normal', label: 'Normal' },
+  { id: 'UV', label: 'UV' },
+  { id: 'Pattern', label: 'Procedural & motion' },
   { id: 'Effect', label: 'Screen effects' },
+  { id: 'Utility', label: 'Utility' },
   { id: 'Output', label: 'Output' },
 ];
 
@@ -263,9 +268,9 @@ def({
 
 // ------------------------------------------------------------------------ Math
 
-function binary(type, title, desc, op, defB = 0, keywords = '') {
+function binary(type, title, desc, op, defB = 0, keywords = '', extra = {}) {
   def({
-    type, title, cat: 'Math', desc, keywords, width: 150,
+    type, title, cat: 'Math', desc, keywords, width: 150, ...extra,
     inputs: [
       { id: 'a', name: 'A', type: 'dyn', def: 0 },
       { id: 'b', name: 'B', type: 'dyn', def: defB },
@@ -282,9 +287,9 @@ binary('power', 'Power', 'A to the power of B. Higher powers make bright parts s
 binary('min', 'Minimum', 'The smaller of A and B.', (a, b) => `min(${a}, ${b})`, 1, 'smallest');
 binary('max', 'Maximum', 'The larger of A and B.', (a, b) => `max(${a}, ${b})`, 0, 'largest');
 
-function unary(type, title, desc, op, keywords = '') {
+function unary(type, title, desc, op, keywords = '', extra = {}) {
   def({
-    type, title, cat: 'Math', desc, keywords, width: 150,
+    type, title, cat: 'Math', desc, keywords, width: 150, ...extra,
     inputs: [{ id: 'x', name: 'In', type: 'dyn', def: 0 }],
     outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
     gen: ({ I }) => op(I.x),
@@ -387,7 +392,7 @@ def({
 def({
   type: 'combine', title: 'Combine', cat: 'Vector', width: 160,
   desc: 'Builds a vector or colour from single numbers.',
-  keywords: 'join merge vector make rgb xyz',
+  keywords: 'join merge vector make rgb xyz vector2 vector3 vector4 float2 float3 float4',
   inputs: [
     { id: 'x', name: 'R / X', type: 'float', def: 0 },
     { id: 'y', name: 'G / Y', type: 'float', def: 0 },
@@ -523,9 +528,12 @@ def({
 
 def({
   type: 'blend', title: 'Blend', cat: 'Color', width: 180,
-  desc: 'Layers one colour on another like a paint program layer.',
-  keywords: 'overlay screen multiply layer photoshop',
-  params: [{ id: 'mode', name: 'Mode', kind: 'select', def: 'overlay', options: ['overlay', 'screen', 'multiply', 'add', 'soft light'] }],
+  desc: 'Layers one colour on another like a paint program layer. All 21 of Unity\u2019s blend modes.',
+  keywords: 'overlay screen multiply layer photoshop burn dodge difference exclusion lighten darken',
+  params: [{
+    id: 'mode', name: 'Mode', kind: 'select', def: 'overlay',
+    options: ['overlay', 'screen', 'multiply', 'add', 'soft light', 'burn', 'darken', 'difference', 'dodge', 'divide', 'exclusion', 'hard light', 'hard mix', 'lighten', 'linear burn', 'linear light', 'negation', 'pin light', 'subtract', 'vivid light', 'overwrite'],
+  }],
   inputs: [
     { id: 'base', name: 'Base', type: 'vec3', def: [0.5, 0.5, 0.5] },
     { id: 'layer', name: 'Layer', type: 'vec3', def: [1, 1, 1] },
@@ -540,6 +548,22 @@ def({
       multiply: `(${b} * ${l})`,
       add: `(${b} + ${l})`,
       'soft light': `((1.0 - 2.0 * ${l}) * ${b} * ${b} + 2.0 * ${l} * ${b})`,
+      burn: `(1.0 - (1.0 - ${l}) / max(${b}, vec3(1e-5)))`,
+      darken: `min(${l}, ${b})`,
+      difference: `abs(${l} - ${b})`,
+      dodge: `(${b} / max(1.0 - ${l}, vec3(1e-5)))`,
+      divide: `(${b} / (${l} + 1e-5))`,
+      exclusion: `(${l} + ${b} - 2.0 * ${l} * ${b})`,
+      'hard light': `mix(1.0 - 2.0 * (1.0 - ${b}) * (1.0 - ${l}), 2.0 * ${b} * ${l}, step(${l}, vec3(0.5)))`,
+      'hard mix': `step(1.0 - ${b}, ${l})`,
+      lighten: `max(${l}, ${b})`,
+      'linear burn': `(${b} + ${l} - 1.0)`,
+      'linear light': `mix(max(${b} + 2.0 * ${l} - 1.0, 0.0), min(${b} + 2.0 * (${l} - 0.5), 1.0), step(0.5, ${l}))`,
+      negation: `(1.0 - abs(1.0 - ${l} - ${b}))`,
+      'pin light': `mix(min(2.0 * ${b}, ${l}), max(2.0 * (${b} - 0.5), ${l}), step(0.5, ${l}))`,
+      subtract: `(${b} - ${l})`,
+      'vivid light': `mix(1.0 - (1.0 - ${l}) / max(2.0 * ${b}, vec3(1e-5)), ${l} / max(2.0 * (1.0 - ${b}), vec3(1e-5)), step(0.5, ${b}))`,
+      overwrite: `${l}`,
     };
     return {
       pre: `vec3 ${b} = ${I.base}; vec3 ${l} = ${I.layer};`,
@@ -565,11 +589,11 @@ def({
 
 def({
   type: 'checker', title: 'Checkerboard', cat: 'Pattern', width: 170,
-  desc: 'Alternating 0 and 1 squares.',
-  keywords: 'grid squares tiles',
+  desc: 'Alternating 0 and 1 squares. On blocks it uses Face UV, so Scale 2 gives four squares per face.',
+  keywords: 'grid squares tiles checkerboard',
   inputs: [
-    { id: 'uv', name: 'UV', type: 'vec2', bind: 'uv' },
-    { id: 's', name: 'Scale', type: 'float', def: 8 },
+    { id: 'uv', name: 'UV', type: 'vec2', bind: 'faceuv' },
+    { id: 's', name: 'Scale', type: 'float', def: 2 },
   ],
   outputs: [{ id: 'out', name: 'Out', type: 'float' }],
   gen: ({ I, V }) => ({
@@ -742,19 +766,853 @@ def({
   gen: ({ I }) => `(${I.c} + (bg_hash12(floor(bg_screenUV * bg_resolution) + floor(fract(bg_time * 3.0) * 97.0)) - 0.5) * ${I.amt})`,
 });
 
+// =============================================================================
+// Unity Shader Graph parity. The nodes below mirror Shader Graph's node library
+// (Input, Math, Trigonometry, Vector, Channel, Logic, Artistic, Normal, UV,
+// Procedural and Utility), adapted to Minecraft and GLSL.
+// =============================================================================
+
+const lit3 = (v) => `vec3(${v.map((x) => (Number.isInteger(x) ? x.toFixed(1) : String(x))).join(', ')})`;
+
+// ------------------------------------------------------------ More inputs
+
+def({
+  type: 'faceUV', title: 'Face UV', cat: 'Input', graphs: ['terrain'],
+  desc: 'Runs 0 to 1 across every block face, worked out from the world position. Use it for per-block shapes, borders and patterns.',
+  keywords: 'local uv block face tile per block square',
+  outputs: [{ id: 'uv', name: 'UV', type: 'vec2' }],
+  gen: () => ({ out: { uv: 'bg_faceUV' } }),
+});
+
+def({
+  type: 'viewDir', title: 'View Direction', cat: 'Input', graphs: ['terrain'],
+  desc: 'The direction from this point towards the camera.',
+  keywords: 'eye camera vector view',
+  outputs: [{ id: 'v', name: 'Direction', type: 'vec3' }],
+  gen: () => ({ out: { v: 'bg_viewDir' } }),
+});
+
+def({
+  type: 'screenPos', title: 'Screen Position', cat: 'Input', graphs: ['terrain'], fragOnly: true,
+  desc: 'Where this pixel lands on screen, from 0 to 1. Pixels gives the raw pixel coordinate.',
+  keywords: 'screen space position pixel fragcoord',
+  outputs: [
+    { id: 'uv', name: 'UV', type: 'vec2' },
+    { id: 'px', name: 'Pixels', type: 'vec2' },
+  ],
+  gen: () => ({ out: { uv: '(gl_FragCoord.xy / bg_resolution)', px: 'gl_FragCoord.xy' } }),
+});
+
+def({
+  type: 'frontFace', title: 'Is Front Face', cat: 'Input', graphs: ['terrain'], fragOnly: true,
+  desc: '1 on the side of a face that points at you, 0 on its back. Handy for two-sided plants and glass.',
+  keywords: 'backface side two sided gl_FrontFacing',
+  outputs: [{ id: 'out', name: 'Front', type: 'float' }],
+  gen: () => '(gl_FrontFacing ? 1.0 : 0.0)',
+});
+
+def({
+  type: 'sunSky', title: 'Sun & Sky', cat: 'Input',
+  desc: 'The direction to the sun in the world (Unity calls it Main Light Direction), plus the current sky and fog colours.',
+  keywords: 'main light direction sun moon sky fog ambient color',
+  outputs: [
+    { id: 'sun', name: 'Sun Direction', type: 'vec3' },
+    { id: 'sky', name: 'Sky Color', type: 'vec3' },
+    { id: 'fog', name: 'Fog Color', type: 'vec3' },
+  ],
+  gen: () => ({ out: { sun: 'bg_sunDir', sky: 'bg_skyColor', fog: 'bg_fogColor' } }),
+});
+
+def({
+  type: 'camera', title: 'Camera', cat: 'Input',
+  desc: 'Where the player camera is in the world and which way it looks.',
+  keywords: 'eye position forward player view',
+  outputs: [
+    { id: 'pos', name: 'Position', type: 'vec3' },
+    { id: 'fwd', name: 'Forward', type: 'vec3' },
+  ],
+  gen: () => ({ out: { pos: 'bg_camPos', fwd: 'bg_camFwd' } }),
+});
+
+def({
+  type: 'blockTextureLod', title: 'Block Texture LOD', cat: 'Input', graphs: ['terrain'],
+  desc: 'Samples the block texture at a chosen mip level, like Sample Texture 2D LOD. Higher levels are blurrier. Also works in Vertex Offset.',
+  keywords: 'mip level lod sample texture blur',
+  inputs: [
+    { id: 'uv', name: 'UV', type: 'vec2', bind: 'uv' },
+    { id: 'lod', name: 'Level', type: 'float', def: 0 },
+  ],
+  outputs: [
+    { id: 'rgb', name: 'RGB', type: 'vec3' },
+    { id: 'a', name: 'Alpha', type: 'float' },
+  ],
+  gen: ({ I, V }) => ({ pre: `vec4 ${V}c = bg_sampleBlockLod(${I.uv}, ${I.lod});`, out: { rgb: `${V}c.rgb`, a: `${V}c.a` } }),
+});
+
+def({
+  type: 'constant', title: 'Constant', cat: 'Settings', width: 160,
+  desc: 'A maths constant: π, τ (2π), φ (golden ratio), e or √2.',
+  keywords: 'pi tau phi e sqrt2 constant math',
+  params: [{ id: 'which', name: 'Constant', kind: 'select', def: 'PI', options: ['PI', 'TAU', 'PHI', 'E', 'SQRT2'] }],
+  outputs: [{ id: 'out', name: 'Value', type: 'float' }],
+  gen: ({ P }) => ({ PI: '3.14159265', TAU: '6.28318531', PHI: '1.61803399', E: '2.71828183', SQRT2: '1.41421356' })[P.which] || '3.14159265',
+});
+
+def({
+  type: 'choice', title: 'Dropdown Setting', cat: 'Settings', setting: 'choice', width: 200,
+  desc: 'A list of named choices players pick from in Iris → Shader Settings, like a Unity Enum keyword. Outputs the index: 0, 1, 2…',
+  keywords: 'enum keyword option dropdown select list quality iris menu exposed',
+  params: [
+    { id: 'name', name: 'Setting ID', kind: 'ident', def: 'MY_CHOICE' },
+    { id: 'label', name: 'Label in Iris', kind: 'text', def: 'My Choice' },
+    { id: 'options', name: 'Choices', kind: 'list', def: 'Low, Medium, High' },
+    { id: 'value', name: 'Default', kind: 'number', def: 1 },
+  ],
+  outputs: [{ id: 'out', name: 'Index', type: 'float' }],
+  gen: ({ P, settings, node }) => {
+    settings.set(P.name, { kind: 'choice', node: node.id, ...P });
+    return `float(${P.name})`;
+  },
+});
+
+// ------------------------------------------------------------ More math
+
+unary('exp', 'Exponential', 'e raised to the power of In. Grows very fast.', (x) => `exp(${x})`, 'exponent exp2 power');
+unary('log', 'Log', 'Natural logarithm. The opposite of Exponential.', (x) => `log(max(${x}, 1e-6))`, 'logarithm ln log2');
+unary('sqrt', 'Square Root', 'The number that, times itself, gives In.', (x) => `sqrt(max(${x}, 0.0))`, 'root');
+unary('rsqrt', 'Reciprocal Square Root', '1 ÷ √In. Common in lighting maths.', (x) => `inversesqrt(max(${x}, 1e-6))`, 'inverse sqrt');
+unary('reciprocal', 'Reciprocal', '1 ÷ In.', (x) => `(1.0 / ${x})`, 'inverse one over');
+unary('ceil', 'Ceiling', 'Rounds up to the next whole number.', (x) => `ceil(${x})`, 'round up');
+unary('round', 'Round', 'Rounds to the nearest whole number.', (x) => `floor(${x} + 0.5)`, 'nearest');
+unary('sign', 'Sign', '−1 when negative, 0 at zero, 1 when positive.', (x) => `sign(${x})`, 'positive negative');
+unary('trunc', 'Truncate', 'Drops the fraction, rounding towards zero.', (x) => `trunc(${x})`, 'integer part');
+unary('ddx', 'DDX', 'How fast In changes from one pixel to the next, sideways. Pixels only.', (x) => `dFdx(${x})`, 'derivative partial screen', { fragOnly: true });
+unary('ddy', 'DDY', 'How fast In changes from one pixel to the next, up and down. Pixels only.', (x) => `dFdy(${x})`, 'derivative partial screen', { fragOnly: true });
+unary('ddxy', 'DDXY', 'Total pixel-to-pixel change of In (fwidth). Used for crisp anti-aliased edges. Pixels only.', (x) => `fwidth(${x})`, 'derivative fwidth antialias', { fragOnly: true });
+binary('modulo', 'Modulo', 'The remainder of A ÷ B. Makes values repeat.', (a, b) => `mod(${a}, ${b})`, 1, 'mod remainder repeat');
+
+def({
+  type: 'inverseLerp', title: 'Inverse Lerp', cat: 'Math', width: 160,
+  desc: 'Where T sits between A and B: 0 at A, 1 at B. The opposite of Mix.',
+  keywords: 'unlerp inverse interpolate percent',
+  inputs: [
+    { id: 'a', name: 'A', type: 'dyn', def: 0 },
+    { id: 'b', name: 'B', type: 'dyn', def: 1 },
+    { id: 't', name: 'T', type: 'dyn', def: 0.5 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
+  gen: ({ I }) => `((${I.t} - ${I.a}) / (${I.b} - ${I.a}))`,
+});
+
+def({
+  type: 'randomRange', title: 'Random Range', cat: 'Math', width: 170,
+  desc: 'A random number between Min and Max for each seed. Floor the world position first to get one value per block.',
+  keywords: 'random hash rand',
+  inputs: [
+    { id: 'seed', name: 'Seed', type: 'vec3', bind: 'pos' },
+    { id: 'lo', name: 'Min', type: 'float', def: 0 },
+    { id: 'hi', name: 'Max', type: 'float', def: 1 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  gen: ({ I }) => `mix(${I.lo}, ${I.hi}, bg_hash13(${I.seed} * 1.37 + 0.123))`,
+});
+
+// ------------------------------------------------- Trigonometry & waves
+
+function trig(type, title, desc, op, keywords, extra = {}) {
+  unary(type, title, desc, op, keywords, { cat: 'Trig', ...extra });
+}
+NODE_DEFS.sine.cat = 'Trig';
+NODE_DEFS.cosine.cat = 'Trig';
+trig('tan', 'Tangent', 'sin ÷ cos. Shoots to infinity every half turn.', (x) => `tan(${x})`, 'tan');
+trig('asin', 'Arcsine', 'The angle whose sine is In.', (x) => `asin(clamp(${x}, -1.0, 1.0))`, 'arcsin inverse');
+trig('acos', 'Arccosine', 'The angle whose cosine is In.', (x) => `acos(clamp(${x}, -1.0, 1.0))`, 'arccos inverse');
+trig('atan', 'Arctangent', 'The angle whose tangent is In.', (x) => `atan(${x})`, 'arctan inverse');
+trig('degToRad', 'Degrees to Radians', 'Turns degrees into radians. 180° becomes π.', (x) => `radians(${x})`, 'angle convert');
+trig('radToDeg', 'Radians to Degrees', 'Turns radians into degrees. π becomes 180°.', (x) => `degrees(${x})`, 'angle convert');
+trig('squareWave', 'Square Wave', 'Flips between 1 and −1 every half step.', (x) => `(1.0 - 2.0 * floor(fract(${x}) + 0.5))`, 'pulse square');
+trig('triangleWave', 'Triangle Wave', 'Rises and falls in straight lines between −1 and 1.', (x) => `(2.0 * abs(2.0 * (${x} - floor(0.5 + ${x}))) - 1.0)`, 'zigzag triangle');
+trig('sawtoothWave', 'Sawtooth Wave', 'Climbs from −1 to 1, then snaps back.', (x) => `(2.0 * (${x} - floor(0.5 + ${x})))`, 'saw ramp');
+
+def({
+  type: 'atan2', title: 'Arctangent2', cat: 'Trig', width: 160,
+  desc: 'The angle of the point (B, A). Great for spinning and radial patterns.',
+  keywords: 'atan2 angle direction',
+  inputs: [
+    { id: 'a', name: 'A (y)', type: 'dyn', def: 0 },
+    { id: 'b', name: 'B (x)', type: 'dyn', def: 1 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
+  gen: ({ I }) => `atan(${I.a}, ${I.b})`,
+});
+
+def({
+  type: 'hyperbolic', title: 'Hyperbolic', cat: 'Trig', width: 160,
+  desc: 'Hyperbolic sine, cosine or tangent. Tanh is a smooth S-curve that squashes any number into −1 to 1.',
+  keywords: 'sinh cosh tanh',
+  params: [{ id: 'fn', name: 'Function', kind: 'select', def: 'tanh', options: ['sinh', 'cosh', 'tanh'] }],
+  inputs: [{ id: 'x', name: 'In', type: 'dyn', def: 0 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
+  gen: ({ I, P }) => `${['sinh', 'cosh', 'tanh'].includes(P.fn) ? P.fn : 'tanh'}(${I.x})`,
+});
+
+def({
+  type: 'noiseSineWave', title: 'Noise Sine Wave', cat: 'Trig', width: 170,
+  desc: 'A sine wave with a little random wobble added between Min and Max.',
+  keywords: 'jitter wobble sine noise',
+  inputs: [
+    { id: 'x', name: 'In', type: 'dyn', def: 0 },
+    { id: 'lo', name: 'Min', type: 'float', def: -0.5 },
+    { id: 'hi', name: 'Max', type: 'float', def: 0.5 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
+  gen: ({ I, V, T }) => ({
+    pre: `${T} ${V}s = sin(${I.x}); ${T} ${V}r = fract(sin((${V}s - sin(${I.x} + 1.0)) * 91.1312) * 43758.5453);`,
+    out: { out: `(${V}s + (${I.lo} + (${I.hi} - ${I.lo}) * ${V}r))` },
+  }),
+});
+
+// ------------------------------------------------- Vector & channel
+
+def({
+  type: 'cross', title: 'Cross Product', cat: 'Vector', width: 160,
+  desc: 'A direction at right angles to both A and B.',
+  keywords: 'perpendicular cross',
+  inputs: [
+    { id: 'a', name: 'A', type: 'vec3', def: [1, 0, 0] },
+    { id: 'b', name: 'B', type: 'vec3', def: [0, 1, 0] },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I }) => `cross(${I.a}, ${I.b})`,
+});
+
+def({
+  type: 'projection', title: 'Projection', cat: 'Vector', width: 160,
+  desc: 'The part of A that points along B.',
+  keywords: 'project shadow along',
+  inputs: [
+    { id: 'a', name: 'A', type: 'vec3', def: [1, 1, 0] },
+    { id: 'b', name: 'B', type: 'vec3', def: [0, 1, 0] },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I, V }) => ({ pre: `vec3 ${V}b = ${I.b};`, out: { out: `(${V}b * (dot(${I.a}, ${V}b) / max(dot(${V}b, ${V}b), 1e-6)))` } }),
+});
+
+def({
+  type: 'rejection', title: 'Rejection', cat: 'Vector', width: 160,
+  desc: 'The part of A that is at right angles to B. A minus its Projection.',
+  keywords: 'perpendicular remove reject',
+  inputs: [
+    { id: 'a', name: 'A', type: 'vec3', def: [1, 1, 0] },
+    { id: 'b', name: 'B', type: 'vec3', def: [0, 1, 0] },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I, V }) => ({ pre: `vec3 ${V}a = ${I.a}; vec3 ${V}b = ${I.b};`, out: { out: `(${V}a - ${V}b * (dot(${V}a, ${V}b) / max(dot(${V}b, ${V}b), 1e-6)))` } }),
+});
+
+def({
+  type: 'reflect', title: 'Reflection', cat: 'Vector', width: 160,
+  desc: 'Bounces the In direction off a surface with the given normal, like a mirror.',
+  keywords: 'mirror bounce reflect',
+  inputs: [
+    { id: 'i', name: 'In', type: 'vec3', def: [0, -1, 0] },
+    { id: 'n', name: 'Normal', type: 'vec3', bind: 'normal' },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I }) => `reflect(${I.i}, normalize(${I.n}))`,
+});
+
+def({
+  type: 'refract', title: 'Refract', cat: 'Vector', width: 180,
+  desc: 'Bends the In direction as it passes through glass or water. IOR 1 is air, 1.33 is water, 1.5 is glass.',
+  keywords: 'glass water bend ior',
+  inputs: [
+    { id: 'i', name: 'In', type: 'vec3', def: [0, -1, 0] },
+    { id: 'n', name: 'Normal', type: 'vec3', bind: 'normal' },
+    { id: 'src', name: 'IOR Source', type: 'float', def: 1 },
+    { id: 'dst', name: 'IOR Medium', type: 'float', def: 1.33 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I }) => `refract(normalize(${I.i}), normalize(${I.n}), ${I.src} / max(${I.dst}, 1e-4))`,
+});
+
+def({
+  type: 'rotateAxis', title: 'Rotate About Axis', cat: 'Vector', width: 180,
+  desc: 'Spins a direction or position around an axis.',
+  keywords: 'rotate spin turn axis angle',
+  params: [{ id: 'unit', name: 'Angle unit', kind: 'select', def: 'degrees', options: ['degrees', 'radians'] }],
+  inputs: [
+    { id: 'v', name: 'In', type: 'vec3', def: [1, 0, 0] },
+    { id: 'axis', name: 'Axis', type: 'vec3', def: [0, 1, 0] },
+    { id: 'angle', name: 'Angle', type: 'float', def: 45 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I, P }) => `bg_rotateAxis(${I.v}, ${I.axis}, ${P.unit === 'radians' ? I.angle : `radians(${I.angle})`})`,
+});
+
+def({
+  type: 'sphereMask', title: 'Sphere Mask', cat: 'Vector', width: 180,
+  desc: '1 inside a sphere around Center, fading to 0 outside. Hardness sets how sharp the edge is.',
+  keywords: 'radius distance falloff circle mask',
+  inputs: [
+    { id: 'p', name: 'Coords', type: 'vec3', bind: 'pos' },
+    { id: 'c', name: 'Center', type: 'vec3', def: [0, 64, 0] },
+    { id: 'r', name: 'Radius', type: 'float', def: 8 },
+    { id: 'h', name: 'Hardness', type: 'float', def: 0.8 },
+  ],
+  outputs: [{ id: 'out', name: 'Mask', type: 'float' }],
+  gen: ({ I }) => `(1.0 - clamp((distance(${I.p}, ${I.c}) - ${I.r}) / max(1.0 - ${I.h}, 1e-4) / max(${I.r}, 1e-4), 0.0, 1.0))`,
+});
+
+def({
+  type: 'swizzle', title: 'Swizzle', cat: 'Vector', width: 160,
+  desc: 'Reorders or repeats channels. "zyx" reverses a vector, "xxx" copies X into all three, "rg" keeps red and green.',
+  keywords: 'reorder channels xyzw rgba shuffle',
+  params: [{ id: 'mask', name: 'Mask', kind: 'swizzle', def: 'zyx' }],
+  inputs: [{ id: 'v', name: 'In', type: 'vec4', def: [0, 0, 0, 0] }],
+  outputs: [{ id: 'out', name: 'Out', type: (P) => ['float', 'vec2', 'vec3', 'vec4'][swizzleMask(P.mask).length - 1] }],
+  gen: ({ I, P }) => `(${I.v}).${swizzleMask(P.mask)}`,
+});
+
+export function swizzleMask(m) {
+  const map = { r: 'x', g: 'y', b: 'z', a: 'w', x: 'x', y: 'y', z: 'z', w: 'w' };
+  const out = String(m || '').toLowerCase().split('').map((c) => map[c]).filter(Boolean).join('').slice(0, 4);
+  return out || 'x';
+}
+
+def({
+  type: 'flip', title: 'Flip', cat: 'Vector', width: 160,
+  desc: 'Turns the chosen channels negative.',
+  keywords: 'negate invert channel sign',
+  params: [{ id: 'which', name: 'Flip', kind: 'select', def: 'x', options: ['x', 'y', 'z', 'xy', 'xz', 'yz', 'xyz', 'xyzw'] }],
+  inputs: [{ id: 'v', name: 'In', type: 'dyn', def: 0 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
+  gen: ({ I, P, T }) => {
+    const n = TYPE_RANK[T];
+    const s = 'xyzw'.slice(0, n).split('').map((c) => (String(P.which).includes(c) ? '-1.0' : '1.0'));
+    return n === 1 ? `(${I.v} * ${s[0]})` : `(${I.v} * ${T}(${s.join(', ')}))`;
+  },
+});
+
+def({
+  type: 'channelMask', title: 'Channel Mask', cat: 'Vector', width: 170,
+  desc: 'Keeps only the chosen channels and sets the rest to 0.',
+  keywords: 'keep channel rgba isolate',
+  params: [{ id: 'keep', name: 'Keep', kind: 'select', def: 'R', options: ['R', 'G', 'B', 'A', 'RG', 'RB', 'GB', 'RGB', 'RGBA'] }],
+  inputs: [{ id: 'v', name: 'In', type: 'dyn', def: 0 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
+  gen: ({ I, P, T }) => {
+    const n = TYPE_RANK[T];
+    const s = 'RGBA'.slice(0, n).split('').map((c) => (String(P.keep).includes(c) ? '1.0' : '0.0'));
+    return n === 1 ? `(${I.v} * ${s[0]})` : `(${I.v} * ${T}(${s.join(', ')}))`;
+  },
+});
+
+// ----------------------------------------------------------------- Logic
+
+def({
+  type: 'branch', title: 'Branch', cat: 'Logic', width: 160,
+  desc: 'Picks True when the Predicate is on (above 0.5), otherwise False. Like an if/else.',
+  keywords: 'if else condition switch select',
+  inputs: [
+    { id: 'p', name: 'Predicate', type: 'float', def: 1 },
+    { id: 't', name: 'True', type: 'dyn', def: 1 },
+    { id: 'f', name: 'False', type: 'dyn', def: 0 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
+  gen: ({ I }) => `mix(${I.f}, ${I.t}, step(0.5, ${I.p}))`,
+});
+
+def({
+  type: 'comparison', title: 'Comparison', cat: 'Logic', width: 170,
+  desc: 'Compares A and B. Gives 1 when the comparison is true, 0 when it is false.',
+  keywords: 'compare equal less greater if test',
+  params: [{ id: 'op', name: 'Test', kind: 'select', def: 'A > B', options: ['A = B', 'A ≠ B', 'A < B', 'A ≤ B', 'A > B', 'A ≥ B'] }],
+  inputs: [
+    { id: 'a', name: 'A', type: 'float', def: 0 },
+    { id: 'b', name: 'B', type: 'float', def: 0.5 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  gen: ({ I, P }) => {
+    const ops = { 'A = B': '==', 'A ≠ B': '!=', 'A < B': '<', 'A ≤ B': '<=', 'A > B': '>', 'A ≥ B': '>=' };
+    return `((${I.a} ${ops[P.op] || '>'} ${I.b}) ? 1.0 : 0.0)`;
+  },
+});
+
+def({
+  type: 'and', title: 'And', cat: 'Logic', width: 140,
+  desc: '1 only when both A and B are on (above 0.5).',
+  keywords: 'both logic boolean',
+  inputs: [{ id: 'a', name: 'A', type: 'float', def: 1 }, { id: 'b', name: 'B', type: 'float', def: 1 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  gen: ({ I }) => `(step(0.5, ${I.a}) * step(0.5, ${I.b}))`,
+});
+
+def({
+  type: 'or', title: 'Or', cat: 'Logic', width: 140,
+  desc: '1 when A or B (or both) are on.',
+  keywords: 'either logic boolean',
+  inputs: [{ id: 'a', name: 'A', type: 'float', def: 0 }, { id: 'b', name: 'B', type: 'float', def: 0 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  gen: ({ I }) => `max(step(0.5, ${I.a}), step(0.5, ${I.b}))`,
+});
+
+def({
+  type: 'not', title: 'Not', cat: 'Logic', width: 140,
+  desc: 'Flips on and off.',
+  keywords: 'invert logic boolean',
+  inputs: [{ id: 'x', name: 'In', type: 'float', def: 0 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  gen: ({ I }) => `(1.0 - step(0.5, ${I.x}))`,
+});
+
+// ------------------------------------------------------- Color (artistic)
+
+def({
+  type: 'whiteBalance', title: 'White Balance', cat: 'Color', width: 180,
+  desc: 'Warms or cools the colour (Temperature) and shifts it green or magenta (Tint). −1 to 1, using Unity’s maths.',
+  keywords: 'temperature tint warm cool grading',
+  inputs: [
+    { id: 'c', name: 'Color', type: 'vec3', def: [1, 1, 1] },
+    { id: 't', name: 'Temperature', type: 'float', def: 0.2 },
+    { id: 'n', name: 'Tint', type: 'float', def: 0 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I }) => `bg_whiteBalance(${I.c}, ${I.t}, ${I.n})`,
+});
+
+def({
+  type: 'replaceColor', title: 'Replace Color', cat: 'Color', width: 190,
+  desc: 'Swaps one colour for another. Range widens the match, Fuzziness softens its edge.',
+  keywords: 'swap recolor key change',
+  inputs: [
+    { id: 'c', name: 'In', type: 'vec3', def: [1, 1, 1] },
+    { id: 'from', name: 'From', type: 'vec3', def: [0.4, 0.6, 0.25], color: true },
+    { id: 'to', name: 'To', type: 'vec3', def: [0.85, 0.35, 0.2], color: true },
+    { id: 'range', name: 'Range', type: 'float', def: 0.2 },
+    { id: 'fuzz', name: 'Fuzziness', type: 'float', def: 0.1 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I, V }) => ({
+    pre: `vec3 ${V}c = ${I.c};`,
+    out: { out: `mix(${I.to}, ${V}c, clamp((distance(${I.from}, ${V}c) - ${I.range}) / max(${I.fuzz}, 1e-5), 0.0, 1.0))` },
+  }),
+});
+
+def({
+  type: 'colorMask', title: 'Color Mask', cat: 'Color', width: 180,
+  desc: '1 where the input is close to the mask colour, 0 elsewhere.',
+  keywords: 'select key pick color',
+  inputs: [
+    { id: 'c', name: 'In', type: 'vec3', def: [1, 1, 1] },
+    { id: 'm', name: 'Mask Color', type: 'vec3', def: [0.4, 0.6, 0.25], color: true },
+    { id: 'range', name: 'Range', type: 'float', def: 0.2 },
+    { id: 'fuzz', name: 'Fuzziness', type: 'float', def: 0.1 },
+  ],
+  outputs: [{ id: 'out', name: 'Mask', type: 'float' }],
+  gen: ({ I }) => `clamp(1.0 - (distance(${I.m}, ${I.c}) - ${I.range}) / max(${I.fuzz}, 1e-5), 0.0, 1.0)`,
+});
+
+def({
+  type: 'channelMixer', title: 'Channel Mixer', cat: 'Color', width: 180,
+  desc: 'Builds each output channel from a mix of the input red, green and blue. Set the mixes in the inspector.',
+  keywords: 'mixer swap channels grading',
+  inputs: [
+    { id: 'c', name: 'In', type: 'vec3', def: [1, 1, 1] },
+    { id: 'r', name: 'Red Out', type: 'vec3', def: [1, 0, 0] },
+    { id: 'g', name: 'Green Out', type: 'vec3', def: [0, 1, 0] },
+    { id: 'b', name: 'Blue Out', type: 'vec3', def: [0, 0, 1] },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I, V }) => ({ pre: `vec3 ${V}c = ${I.c};`, out: { out: `vec3(dot(${V}c, ${I.r}), dot(${V}c, ${I.g}), dot(${V}c, ${I.b}))` } }),
+});
+
+def({
+  type: 'invertColors', title: 'Invert Colors', cat: 'Color', width: 170,
+  desc: 'Turns the chosen channels into their opposite, like a photo negative.',
+  keywords: 'negative invert one minus',
+  params: [{ id: 'which', name: 'Invert', kind: 'select', def: 'RGB', options: ['RGB', 'R', 'G', 'B', 'RG', 'GB', 'RB'] }],
+  inputs: [{ id: 'c', name: 'In', type: 'vec3', def: [1, 1, 1] }],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I, P, V }) => {
+    const m = 'RGB'.split('').map((c) => (String(P.which).includes(c) ? '1.0' : '0.0'));
+    return { pre: `vec3 ${V}c = ${I.c};`, out: { out: `mix(${V}c, 1.0 - ${V}c, vec3(${m.join(', ')}))` } };
+  },
+});
+
+def({
+  type: 'colorspace', title: 'Colorspace Conversion', cat: 'Color', width: 200,
+  desc: 'Converts between RGB, Linear and HSV. In HSV, X is hue, Y saturation and Z brightness.',
+  keywords: 'hsv linear srgb gamma convert',
+  params: [
+    { id: 'from', name: 'From', kind: 'select', def: 'RGB', options: ['RGB', 'Linear', 'HSV'] },
+    { id: 'to', name: 'To', kind: 'select', def: 'HSV', options: ['RGB', 'Linear', 'HSV'] },
+  ],
+  inputs: [{ id: 'c', name: 'In', type: 'vec3', def: [1, 0.5, 0.2] }],
+  outputs: [{ id: 'out', name: 'Out', type: 'vec3' }],
+  gen: ({ I, P }) => {
+    const f = P.from, t = P.to, c = I.c;
+    if (f === t) return c;
+    if (f === 'RGB' && t === 'Linear') return `bg_toLinear(${c})`;
+    if (f === 'Linear' && t === 'RGB') return `bg_toSRGB(${c})`;
+    if (f === 'RGB' && t === 'HSV') return `bg_rgb2hsv(${c})`;
+    if (f === 'HSV' && t === 'RGB') return `bg_hsv2rgb(${c})`;
+    if (f === 'Linear' && t === 'HSV') return `bg_rgb2hsv(bg_toSRGB(${c}))`;
+    return `bg_toLinear(bg_hsv2rgb(${c}))`;
+  },
+});
+
+def({
+  type: 'dither', title: 'Dither', cat: 'Color', width: 160, fragOnly: true,
+  desc: 'Subtracts an ordered 4×4 dither pattern. Feed it into Alpha for see-through fades without sorting problems.',
+  keywords: 'bayer screen door transparency fade',
+  inputs: [{ id: 'x', name: 'In', type: 'dyn', def: 0.5 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
+  gen: ({ I }) => `(${I.x} - bg_bayer4(gl_FragCoord.xy))`,
+});
+
+def({
+  type: 'metal', title: 'Metal Reflectance', cat: 'Color', width: 180,
+  desc: 'Measured colours of real metals. Plug into Color with Metallic at 1 on the Block Output.',
+  keywords: 'pbr metallic gold iron copper silver',
+  params: [{ id: 'm', name: 'Metal', kind: 'select', def: 'Gold', options: ['Iron', 'Silver', 'Aluminium', 'Gold', 'Copper', 'Chromium', 'Nickel', 'Titanium', 'Cobalt', 'Platinum'] }],
+  outputs: [{ id: 'rgb', name: 'Color', type: 'vec3' }],
+  gen: ({ P }) => {
+    const M = {
+      Iron: [0.56, 0.57, 0.58], Silver: [0.972, 0.96, 0.915], Aluminium: [0.913, 0.921, 0.925], Gold: [1.0, 0.766, 0.336],
+      Copper: [0.955, 0.637, 0.538], Chromium: [0.55, 0.556, 0.554], Nickel: [0.66, 0.609, 0.526], Titanium: [0.542, 0.497, 0.449],
+      Cobalt: [0.662, 0.655, 0.634], Platinum: [0.672, 0.637, 0.585],
+    };
+    return { out: { rgb: lit3(M[P.m] || M.Gold) } };
+  },
+});
+
+def({
+  type: 'blackbody', title: 'Blackbody', cat: 'Color', width: 170,
+  desc: 'The colour something glows at a temperature in Kelvin: 1500 is ember red, 6500 is white, 12000 is blue.',
+  keywords: 'temperature kelvin fire heat glow',
+  inputs: [{ id: 't', name: 'Kelvin', type: 'float', def: 2500 }],
+  outputs: [{ id: 'rgb', name: 'Color', type: 'vec3' }],
+  gen: ({ I }) => ({ out: { rgb: `bg_blackbody(${I.t})` } }),
+});
+
+def({
+  type: 'gradient', title: 'Gradient', cat: 'Color', width: 200,
+  desc: 'Maps 0–1 onto a colour ramp, like Unity’s Gradient and Sample Gradient nodes. Edit the stops in the inspector.',
+  keywords: 'ramp colour map lut sample gradient',
+  params: [
+    { id: 'stops', name: 'Stops', kind: 'gradient', def: [{ c: '#1d1b5e', t: 0 }, { c: '#d6493b', t: 0.5 }, { c: '#ffe08a', t: 1 }] },
+    { id: 'mode', name: 'Mode', kind: 'select', def: 'blend', options: ['blend', 'fixed'] },
+  ],
+  inputs: [{ id: 't', name: 'T', type: 'float', def: 0.5 }],
+  outputs: [{ id: 'rgb', name: 'Color', type: 'vec3' }],
+  gen: ({ I, P, V }) => {
+    const stops = normStops(P.stops);
+    const lines = [`float ${V}t = clamp(${I.t}, 0.0, 1.0);`, `vec3 ${V}g = ${lit3(hexToLinear(stops[0].c))};`];
+    for (let i = 1; i < stops.length; i++) {
+      const a = stops[i - 1].t, b = stops[i].t;
+      const col = lit3(hexToLinear(stops[i].c));
+      const k = P.mode === 'fixed'
+        ? `step(${fnum(b)}, ${V}t)`
+        : `clamp((${V}t - ${fnum(a)}) / ${fnum(Math.max(b - a, 1e-4))}, 0.0, 1.0)`;
+      lines.push(`${V}g = mix(${V}g, ${col}, ${k});`);
+    }
+    return { pre: lines.join('\n'), out: { rgb: `${V}g` } };
+  },
+});
+
+export function normStops(stops) {
+  const list = (Array.isArray(stops) ? stops : []).filter((s) => s && /^#[0-9a-f]{6}$/i.test(s.c)).map((s) => ({ c: s.c, t: Math.max(0, Math.min(1, Number(s.t) || 0)) }));
+  if (!list.length) return [{ c: '#000000', t: 0 }, { c: '#ffffff', t: 1 }];
+  return list.sort((a, b) => a.t - b.t).slice(0, 8);
+}
+
+function fnum(n) {
+  let s = String(Math.round(Number(n) * 10000) / 10000);
+  if (!/[.e]/.test(s)) s += '.0';
+  return s;
+}
+
+// ------------------------------------------------------------------ Normal
+
+def({
+  type: 'normalFromHeight', title: 'Normal From Height', cat: 'Normal', graphs: ['terrain'], fragOnly: true, width: 190,
+  desc: 'Turns a height pattern (like Noise) into bumps the light can catch. Plug into Block Output → Normal with Lit lighting on.',
+  keywords: 'bump height map normal map derivative',
+  inputs: [
+    { id: 'h', name: 'Height', type: 'float', def: 0 },
+    { id: 's', name: 'Strength', type: 'float', def: 1 },
+  ],
+  outputs: [{ id: 'n', name: 'Normal', type: 'vec3' }],
+  gen: ({ I }) => `bg_bumpNormal(${I.h}, ${I.s}, bg_normal, bg_worldPos)`,
+});
+
+def({
+  type: 'normalStrength', title: 'Normal Strength', cat: 'Normal', graphs: ['terrain'], width: 180,
+  desc: 'Makes bumps stronger or weaker. 0 gives the flat face normal, 1 keeps the input.',
+  keywords: 'bump intensity flatten',
+  inputs: [
+    { id: 'n', name: 'Normal', type: 'vec3', bind: 'normal' },
+    { id: 's', name: 'Strength', type: 'float', def: 0.5 },
+  ],
+  outputs: [{ id: 'out', name: 'Normal', type: 'vec3' }],
+  gen: ({ I }) => `normalize(mix(bg_normal, ${I.n}, ${I.s}))`,
+});
+
+def({
+  type: 'normalBlend', title: 'Normal Blend', cat: 'Normal', graphs: ['terrain'], width: 170,
+  desc: 'Combines the bumps of two normals into one.',
+  keywords: 'combine bumps detail',
+  inputs: [
+    { id: 'a', name: 'A', type: 'vec3', bind: 'normal' },
+    { id: 'b', name: 'B', type: 'vec3', bind: 'normal' },
+  ],
+  outputs: [{ id: 'out', name: 'Normal', type: 'vec3' }],
+  gen: ({ I }) => `normalize(${I.a} + ${I.b} - bg_normal)`,
+});
+
+// ---------------------------------------------------------------------- UV
+
+def({
+  type: 'tilingOffset', title: 'Tiling And Offset', cat: 'UV', width: 180,
+  desc: 'Repeats (Tiling) and slides (Offset) a UV.',
+  keywords: 'tile repeat scroll scale uv',
+  inputs: [
+    { id: 'uv', name: 'UV', type: 'vec2', bind: 'faceuv' },
+    { id: 't', name: 'Tiling', type: 'vec2', def: [1, 1] },
+    { id: 'o', name: 'Offset', type: 'vec2', def: [0, 0] },
+  ],
+  outputs: [{ id: 'out', name: 'UV', type: 'vec2' }],
+  gen: ({ I }) => `(${I.uv} * ${I.t} + ${I.o})`,
+});
+
+def({
+  type: 'rotateUV', title: 'Rotate', cat: 'UV', width: 170,
+  desc: 'Spins a UV around a center point. Rotation is in radians.',
+  keywords: 'spin turn uv rotate',
+  inputs: [
+    { id: 'uv', name: 'UV', type: 'vec2', bind: 'faceuv' },
+    { id: 'c', name: 'Center', type: 'vec2', def: [0.5, 0.5] },
+    { id: 'r', name: 'Rotation', type: 'float', def: 0.785 },
+  ],
+  outputs: [{ id: 'out', name: 'UV', type: 'vec2' }],
+  gen: ({ I, V }) => ({
+    pre: `vec2 ${V}d = ${I.uv} - ${I.c}; float ${V}s = sin(${I.r}); float ${V}k = cos(${I.r});`,
+    out: { out: `(vec2(${V}d.x * ${V}k + ${V}d.y * ${V}s, -${V}d.x * ${V}s + ${V}d.y * ${V}k) + ${I.c})` },
+  }),
+});
+
+def({
+  type: 'twirl', title: 'Twirl', cat: 'UV', width: 170,
+  desc: 'Swirls a UV around a center, like a whirlpool. Try it on Scene Color in Post FX.',
+  keywords: 'swirl spiral vortex whirlpool',
+  inputs: [
+    { id: 'uv', name: 'UV', type: 'vec2', bind: 'faceuv' },
+    { id: 'c', name: 'Center', type: 'vec2', def: [0.5, 0.5] },
+    { id: 's', name: 'Strength', type: 'float', def: 6 },
+    { id: 'o', name: 'Offset', type: 'vec2', def: [0, 0] },
+  ],
+  outputs: [{ id: 'out', name: 'UV', type: 'vec2' }],
+  gen: ({ I, V }) => ({
+    pre: `vec2 ${V}d = ${I.uv} - ${I.c}; float ${V}a = ${I.s} * length(${V}d);`,
+    out: { out: `(vec2(cos(${V}a) * ${V}d.x - sin(${V}a) * ${V}d.y, sin(${V}a) * ${V}d.x + cos(${V}a) * ${V}d.y) + ${I.c} + ${I.o})` },
+  }),
+});
+
+def({
+  type: 'polar', title: 'Polar Coordinates', cat: 'UV', width: 190,
+  desc: 'Turns a UV into distance from the center (X) and angle around it (Y). Makes rings and spokes.',
+  keywords: 'radial circle angle rings',
+  inputs: [
+    { id: 'uv', name: 'UV', type: 'vec2', bind: 'faceuv' },
+    { id: 'c', name: 'Center', type: 'vec2', def: [0.5, 0.5] },
+    { id: 'rs', name: 'Radial Scale', type: 'float', def: 1 },
+    { id: 'ls', name: 'Length Scale', type: 'float', def: 1 },
+  ],
+  outputs: [{ id: 'out', name: 'UV', type: 'vec2' }],
+  gen: ({ I, V }) => ({
+    pre: `vec2 ${V}d = ${I.uv} - ${I.c};`,
+    out: { out: `vec2(length(${V}d) * 2.0 * ${I.rs}, atan(${V}d.x, ${V}d.y) * 0.15915494 * ${I.ls})` },
+  }),
+});
+
+def({
+  type: 'spherize', title: 'Spherize', cat: 'UV', width: 170,
+  desc: 'Bulges a UV out from the center like a fisheye lens.',
+  keywords: 'fisheye bulge lens warp',
+  inputs: [
+    { id: 'uv', name: 'UV', type: 'vec2', bind: 'faceuv' },
+    { id: 'c', name: 'Center', type: 'vec2', def: [0.5, 0.5] },
+    { id: 's', name: 'Strength', type: 'vec2', def: [10, 10] },
+    { id: 'o', name: 'Offset', type: 'vec2', def: [0, 0] },
+  ],
+  outputs: [{ id: 'out', name: 'UV', type: 'vec2' }],
+  gen: ({ I, V }) => ({
+    pre: `vec2 ${V}uv = ${I.uv}; vec2 ${V}d = ${V}uv - ${I.c}; float ${V}d2 = dot(${V}d, ${V}d);`,
+    out: { out: `(${V}uv + ${V}d * (${V}d2 * ${V}d2 * ${I.s}) + ${I.o})` },
+  }),
+});
+
+def({
+  type: 'radialShear', title: 'Radial Shear', cat: 'UV', width: 170,
+  desc: 'Twists a UV sideways more and more towards the edges.',
+  keywords: 'warp twist shear',
+  inputs: [
+    { id: 'uv', name: 'UV', type: 'vec2', bind: 'faceuv' },
+    { id: 'c', name: 'Center', type: 'vec2', def: [0.5, 0.5] },
+    { id: 's', name: 'Strength', type: 'vec2', def: [10, 10] },
+    { id: 'o', name: 'Offset', type: 'vec2', def: [0, 0] },
+  ],
+  outputs: [{ id: 'out', name: 'UV', type: 'vec2' }],
+  gen: ({ I, V }) => ({
+    pre: `vec2 ${V}uv = ${I.uv}; vec2 ${V}d = ${V}uv - ${I.c}; float ${V}d2 = dot(${V}d, ${V}d);`,
+    out: { out: `(${V}uv + vec2(${V}d.y, -${V}d.x) * (${V}d2 * ${I.s}) + ${I.o})` },
+  }),
+});
+
+// -------------------------------------------------------------- Procedural
+
+def({
+  type: 'gradientNoise', title: 'Gradient Noise', cat: 'Pattern', width: 180,
+  desc: 'Smooth Perlin-style noise from 0 to 1. Softer and less blocky than Noise.',
+  keywords: 'perlin gradient noise smooth',
+  inputs: [
+    { id: 'p', name: 'Position', type: 'vec3', bind: 'pos' },
+    { id: 's', name: 'Scale', type: 'float', def: 1 },
+  ],
+  outputs: [{ id: 'out', name: 'Noise', type: 'float' }],
+  gen: ({ I }) => `bg_gradNoise3(${I.p} * ${I.s})`,
+});
+
+def({
+  type: 'voronoi', title: 'Voronoi', cat: 'Pattern', width: 180,
+  desc: 'Cell pattern like cracked mud or crystals. Distance is 0 at each cell centre; Cells gives each cell its own random value.',
+  keywords: 'cells worley crystal crack cellular',
+  inputs: [
+    { id: 'p', name: 'Position', type: 'vec3', bind: 'pos' },
+    { id: 's', name: 'Cell Density', type: 'float', def: 1 },
+    { id: 'j', name: 'Randomness', type: 'float', def: 1 },
+  ],
+  outputs: [
+    { id: 'd', name: 'Distance', type: 'float' },
+    { id: 'cells', name: 'Cells', type: 'float' },
+  ],
+  gen: ({ I, V }) => ({ pre: `vec2 ${V}v = bg_voronoi3(${I.p} * ${I.s}, ${I.j});`, out: { d: `${V}v.x`, cells: `${V}v.y` } }),
+});
+
+function shape(type, title, desc, extraInputs, body, keywords) {
+  def({
+    type, title, cat: 'Pattern', width: 180, fragOnly: true, desc, keywords,
+    inputs: [{ id: 'uv', name: 'UV', type: 'vec2', bind: 'faceuv' }, ...extraInputs],
+    outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+    gen: body,
+  });
+}
+
+shape('ellipse', 'Ellipse', 'A soft-edged ellipse in the middle of the UV. Width and height of 1 fill it.', [
+  { id: 'w', name: 'Width', type: 'float', def: 0.6 },
+  { id: 'h', name: 'Height', type: 'float', def: 0.6 },
+], ({ I, V }) => ({
+  pre: `float ${V}d = length((${I.uv} * 2.0 - 1.0) / vec2(${I.w}, ${I.h}));`,
+  out: { out: `clamp((1.0 - ${V}d) / max(fwidth(${V}d), 1e-5), 0.0, 1.0)` },
+}), 'circle oval shape');
+
+shape('rectangle', 'Rectangle', 'A crisp rectangle in the middle of the UV. Great for block borders.', [
+  { id: 'w', name: 'Width', type: 'float', def: 0.8 },
+  { id: 'h', name: 'Height', type: 'float', def: 0.8 },
+], ({ I, V }) => ({
+  pre: `vec2 ${V}d = abs(${I.uv} * 2.0 - 1.0) - vec2(${I.w}, ${I.h}); ${V}d = 1.0 - ${V}d / max(fwidth(${V}d), vec2(1e-5));`,
+  out: { out: `clamp(min(${V}d.x, ${V}d.y), 0.0, 1.0)` },
+}), 'square box border frame shape');
+
+shape('roundedRect', 'Rounded Rectangle', 'A rectangle with rounded corners.', [
+  { id: 'w', name: 'Width', type: 'float', def: 0.8 },
+  { id: 'h', name: 'Height', type: 'float', def: 0.8 },
+  { id: 'r', name: 'Radius', type: 'float', def: 0.2 },
+], ({ I, V }) => ({
+  pre: `float ${V}r = max(min(min(abs(${I.r} * 2.0), abs(${I.w})), abs(${I.h})), 1e-5); vec2 ${V}q = abs(${I.uv} * 2.0 - 1.0) - vec2(${I.w}, ${I.h}) + ${V}r; float ${V}d = length(max(vec2(0.0), ${V}q)) / ${V}r;`,
+  out: { out: `clamp((1.0 - ${V}d) / max(fwidth(${V}d), 1e-5), 0.0, 1.0)` },
+}), 'rounded box shape');
+
+shape('polygon', 'Polygon', 'A regular polygon: 3 sides for a triangle, 6 for a hexagon.', [
+  { id: 'n', name: 'Sides', type: 'float', def: 6 },
+  { id: 'w', name: 'Width', type: 'float', def: 0.7 },
+  { id: 'h', name: 'Height', type: 'float', def: 0.7 },
+], ({ I, V }) => ({
+  pre: [
+    `float ${V}n = max(${I.n}, 3.0); float ${V}c = cos(3.14159265 / ${V}n);`,
+    `vec2 ${V}uv = (${I.uv} * 2.0 - 1.0) / vec2(${I.w} * ${V}c, ${I.h} * ${V}c); ${V}uv.y *= -1.0;`,
+    `float ${V}p = atan(${V}uv.x, ${V}uv.y); float ${V}r = 6.28318531 / ${V}n;`,
+    `float ${V}d = cos(floor(0.5 + ${V}p / ${V}r) * ${V}r - ${V}p) * length(${V}uv);`,
+  ].join('\n'),
+  out: { out: `clamp((1.0 - ${V}d) / max(fwidth(${V}d), 1e-5), 0.0, 1.0)` },
+}), 'hexagon triangle star shape');
+
+// ----------------------------------------------------------------- Utility
+
+def({
+  type: 'customFunction', title: 'Custom Function', cat: 'Utility', width: 200,
+  desc: 'Write your own GLSL, like Unity’s Custom Function node. Inputs arrive as vec4 a, b, c, d plus float time. Return a value of the output type.',
+  keywords: 'code glsl hlsl script custom expression function',
+  params: [
+    { id: 'outType', name: 'Output type', kind: 'select', def: 'vec3', options: ['float', 'vec2', 'vec3', 'vec4'] },
+    { id: 'code', name: 'Code', kind: 'code', def: '// a, b, c, d are vec4. time is in seconds.\nfloat pulse = 0.5 + 0.5 * sin(time * 3.0 + b.x);\nreturn a.rgb * pulse;' },
+  ],
+  inputs: [
+    { id: 'a', name: 'a', type: 'vec4', def: [1, 1, 1, 1] },
+    { id: 'b', name: 'b', type: 'vec4', def: [0, 0, 0, 0] },
+    { id: 'c', name: 'c', type: 'vec4', def: [0, 0, 0, 0] },
+    { id: 'd', name: 'd', type: 'vec4', def: [0, 0, 0, 0] },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: (P) => (['float', 'vec2', 'vec3', 'vec4'].includes(P.outType) ? P.outType : 'vec3') }],
+  gen: ({ I, P, node }) => {
+    const t = ['float', 'vec2', 'vec3', 'vec4'].includes(P.outType) ? P.outType : 'vec3';
+    const fn = `bg_custom_${node.id}`;
+    return {
+      fn: { key: fn, code: `${t} ${fn}(vec4 a, vec4 b, vec4 c, vec4 d, float time) {\n${String(P.code || `return ${t}(0.0);`)}\n}` },
+      out: { out: `${fn}(${I.a}, ${I.b}, ${I.c}, ${I.d}, bg_time)` },
+    };
+  },
+});
+
+def({
+  type: 'reroute', title: 'Reroute', cat: 'Utility', width: 120, noPreview: true,
+  desc: 'Passes a value straight through. Use it to tidy long wires.',
+  keywords: 'redirect elbow wire tidy pass',
+  inputs: [{ id: 'x', name: 'In', type: 'dyn', def: 0 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
+  gen: ({ I }) => I.x,
+});
+
+def({
+  type: 'note', title: 'Sticky Note', cat: 'Utility', isNote: true, width: 220, noPreview: true,
+  desc: 'A note to explain your graph. It does nothing to the shader.',
+  keywords: 'comment sticky text label annotation',
+  params: [{ id: 'text', name: 'Text', kind: 'note', def: 'Write a note here.' }],
+  gen: () => ({ out: {} }),
+});
+
 // ---------------------------------------------------------------------- Output
 
 def({
-  type: 'terrainOutput', title: 'Block Output', cat: 'Output', graphs: ['terrain'], isOutput: true, width: 210,
-  desc: 'What every block finally looks like. Final colour = Color × Light + Color × Emission. Vertex Offset moves the block itself.',
+  type: 'terrainOutput', title: 'Block Output', cat: 'Output', graphs: ['terrain'], isOutput: true, width: 220,
+  desc: 'What every block finally looks like, like Unity’s Master Stack. Vanilla: Color × Light × AO + Color × Emission. Lit also adds sun shading and a specular highlight from Normal, Smoothness and Metallic.',
   inputs: [
     { id: 'color', name: 'Color', type: 'vec3', bind: 'albedo' },
     { id: 'alpha', name: 'Alpha', type: 'float', bind: 'alpha' },
     { id: 'light', name: 'Light', type: 'vec3', bind: 'light' },
     { id: 'emission', name: 'Emission', type: 'float', def: 0 },
+    { id: 'normal', name: 'Normal', type: 'vec3', bind: 'normal' },
+    { id: 'smooth', name: 'Smoothness', type: 'float', def: 0 },
+    { id: 'metal', name: 'Metallic', type: 'float', def: 0 },
+    { id: 'ao', name: 'Ambient Occlusion', type: 'float', def: 1 },
+    { id: 'clip', name: 'Alpha Clip', type: 'float', def: 0.1 },
     { id: 'offset', name: 'Vertex Offset', type: 'vec3', def: [0, 0, 0], stage: 'vertex' },
   ],
-  params: [{ id: 'fog', name: 'Vanilla distance fog', kind: 'bool', def: true }],
+  params: [
+    { id: 'lighting', name: 'Lighting', kind: 'select', def: 'Vanilla', options: ['Vanilla', 'Lit'] },
+    { id: 'fog', name: 'Vanilla distance fog', kind: 'bool', def: true },
+  ],
   gen: () => ({ out: {} }),
 });
 
@@ -785,14 +1643,18 @@ export function rgbToHex(rgb) {
 export const BINDS = {
   terrain: {
     uv: { expr: 'bg_uv', type: 'vec2', label: 'Texture UV' },
+    faceuv: { expr: 'bg_faceUV', type: 'vec2', label: 'Face UV' },
     pos: { expr: 'bg_worldPos', type: 'vec3', label: 'World Pos' },
+    normal: { expr: 'bg_normal', type: 'vec3', label: 'Surface Normal' },
     albedo: { expr: '(bg_sampleBlock(bg_uv).rgb * bg_vcolor.rgb)', type: 'vec3', label: 'Texture × Tint', fragOnly: true },
     alpha: { expr: '(bg_sampleBlock(bg_uv).a * bg_vcolor.a)', type: 'float', label: 'Texture Alpha', fragOnly: true },
     light: { expr: 'bg_light', type: 'vec3', label: 'Vanilla Light' },
   },
   post: {
     uv: { expr: 'bg_screenUV', type: 'vec2', label: 'Screen UV' },
+    faceuv: { expr: 'bg_screenUV', type: 'vec2', label: 'Screen UV' },
     pos: { expr: 'vec3(bg_screenUV * vec2(bg_aspect, 1.0) * 8.0, 0.0)', type: 'vec3', label: 'Screen Pos' },
+    normal: { expr: 'vec3(0.0, 0.0, 1.0)', type: 'vec3', label: 'Facing Camera' },
     scene: { expr: 'bg_sampleScene(bg_screenUV).rgb', type: 'vec3', label: 'Scene Color' },
   },
 };
@@ -845,5 +1707,111 @@ vec3 bg_hsv2rgb(vec3 c) {
   vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
   vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
   return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+}
+vec3 bg_hash33(vec3 p3) {
+  p3 = fract(p3 * vec3(0.1031, 0.1030, 0.0973));
+  p3 += dot(p3, p3.yxz + 33.33);
+  return fract((p3.xxy + p3.yxx) * p3.zyx);
+}
+float bg_gradDot(vec3 i, vec3 f, vec3 o) {
+  return dot(bg_hash33(i + o) * 2.0 - 1.0, f - o);
+}
+float bg_gradNoise3(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  vec3 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  float x00 = mix(bg_gradDot(i, f, vec3(0.0, 0.0, 0.0)), bg_gradDot(i, f, vec3(1.0, 0.0, 0.0)), u.x);
+  float x10 = mix(bg_gradDot(i, f, vec3(0.0, 1.0, 0.0)), bg_gradDot(i, f, vec3(1.0, 1.0, 0.0)), u.x);
+  float x01 = mix(bg_gradDot(i, f, vec3(0.0, 0.0, 1.0)), bg_gradDot(i, f, vec3(1.0, 0.0, 1.0)), u.x);
+  float x11 = mix(bg_gradDot(i, f, vec3(0.0, 1.0, 1.0)), bg_gradDot(i, f, vec3(1.0, 1.0, 1.0)), u.x);
+  return clamp(mix(mix(x00, x10, u.y), mix(x01, x11, u.y), u.z) * 0.9 + 0.5, 0.0, 1.0);
+}
+vec2 bg_voronoi3(vec3 p, float jitter) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  float best = 8.0;
+  float cell = 0.0;
+  for (int z = -1; z <= 1; z++) {
+    for (int y = -1; y <= 1; y++) {
+      for (int x = -1; x <= 1; x++) {
+        vec3 o = vec3(float(x), float(y), float(z));
+        vec3 h = bg_hash33(i + o);
+        vec3 r = o + h * jitter - f;
+        float d = dot(r, r);
+        if (d < best) { best = d; cell = h.x; }
+      }
+    }
+  }
+  return vec2(sqrt(best), cell);
+}
+vec3 bg_blackbody(float t) {
+  t = max(t, 1.0);
+  vec3 c = vec3(255.0);
+  c.x = 56100000.0 * pow(t, -1.5) + 148.0;
+  c.y = t > 6500.0 ? 35200000.0 * pow(t, -1.5) + 184.0 : 100.04 * log(t) - 623.6;
+  c.z = 194.18 * log(t) - 1448.6;
+  c = clamp(c, 0.0, 255.0) / 255.0;
+  if (t < 1000.0) c *= t / 1000.0;
+  return c;
+}
+float bg_bayer2(vec2 a) {
+  a = floor(a);
+  return fract(dot(a, vec2(0.5, a.y * 0.75)));
+}
+float bg_bayer4(vec2 a) {
+  return bg_bayer2(0.5 * a) * 0.25 + bg_bayer2(a);
+}
+vec3 bg_toLinear(vec3 c) {
+  c = max(c, 0.0);
+  return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
+}
+vec3 bg_toSRGB(vec3 c) {
+  c = max(c, 0.0);
+  return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
+}
+vec3 bg_whiteBalance(vec3 c, float temperature, float tint) {
+  float t1 = temperature * 10.0 / 6.0;
+  float t2 = tint * 10.0 / 6.0;
+  float x = 0.31271 - t1 * (t1 < 0.0 ? 0.1 : 0.05);
+  float y = 2.87 * x - 3.0 * x * x - 0.27509507 + t2 * 0.05;
+  float X = x / y;
+  float Z = (1.0 - x - y) / y;
+  vec3 w2 = vec3(0.7328 * X + 0.4296 - 0.1624 * Z, -0.7036 * X + 1.6975 + 0.0061 * Z, 0.0030 * X + 0.0136 + 0.9834 * Z);
+  vec3 balance = vec3(0.949237, 1.03542, 1.08728) / w2;
+  vec3 lms = vec3(
+    dot(vec3(0.390405, 0.549941, 0.00892632), c),
+    dot(vec3(0.0708416, 0.963172, 0.00135775), c),
+    dot(vec3(0.0231082, 0.128021, 0.936245), c)) * balance;
+  return vec3(
+    dot(vec3(2.85847, -1.62879, -0.024891), lms),
+    dot(vec3(-0.210182, 1.1582, 0.000324281), lms),
+    dot(vec3(-0.041812, -0.118169, 1.06867), lms));
+}
+vec3 bg_rotateAxis(vec3 v, vec3 axis, float a) {
+  axis = normalize(axis);
+  float s = sin(a);
+  float k = cos(a);
+  return v * k + cross(axis, v) * s + axis * dot(axis, v) * (1.0 - k);
+}
+vec2 bg_faceUVOf(vec3 p, vec3 n) {
+  vec3 a = abs(n);
+  vec2 f = a.y > 0.5 ? p.xz : (a.x > 0.5 ? vec2(p.z, -p.y) : vec2(p.x, -p.y));
+  return fract(f);
+}
+`;
+
+// Helpers that use screen derivatives. They only compile in pixel (fragment)
+// shaders, so they are kept apart from the shared helpers above.
+export const GLSL_FRAG_HELPERS = `
+vec3 bg_bumpNormal(float h, float strength, vec3 n, vec3 p) {
+  vec3 dpdx = dFdx(p);
+  vec3 dpdy = dFdy(p);
+  float dhdx = dFdx(h) * strength;
+  float dhdy = dFdy(h) * strength;
+  vec3 r1 = cross(dpdy, n);
+  vec3 r2 = cross(n, dpdx);
+  float det = dot(dpdx, r1);
+  vec3 grad = sign(det) * (dhdx * r1 + dhdy * r2);
+  return normalize(abs(det) * n - grad);
 }
 `;

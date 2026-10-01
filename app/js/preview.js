@@ -502,6 +502,7 @@ export class Preview {
 
   setSettings(map) {
     this.settings = map;
+    if (this.np) this.np.dirty = true;
   }
 
   resize() {
@@ -595,6 +596,12 @@ export class Preview {
     const view = m4.lookAt(eye, target, [0, 1, 0]);
     const viewProj = m4.mul(proj, view);
     const env = this.environment();
+    const fl = Math.hypot(target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]);
+    const f = {
+      eye, env, time, projInv: m4.invert(proj),
+      fwd: [(target[0] - eye[0]) / fl, (target[1] - eye[1]) / fl, (target[2] - eye[2]) / fl],
+    };
+    this.lastFrame = f;
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.fbo);
     gl.viewport(0, 0, this.w, this.h);
@@ -626,13 +633,8 @@ export class Preview {
     const u = tp.u;
     if (u.u_atlas) gl.uniform1i(u.u_atlas, 0);
     if (u.u_viewProj) gl.uniformMatrix4fv(u.u_viewProj, false, viewProj);
-    if (u.u_cam) gl.uniform3fv(u.u_cam, eye);
-    if (u.u_fogColor) gl.uniform3fv(u.u_fogColor, env.fog);
     if (u.u_far) gl.uniform1f(u.u_far, 28);
-    if (u.u_time) gl.uniform1f(u.u_time, time);
-    if (u.u_dayTime) gl.uniform1f(u.u_dayTime, this.dayTime);
-    if (u.u_rain) gl.uniform1f(u.u_rain, this.rain);
-    this.applySettings(u);
+    this.setCommon(u, f);
     gl.disable(gl.BLEND);
     gl.bindVertexArray(this.meshes.opaque.vao);
     gl.drawArrays(gl.TRIANGLES, 0, this.meshes.opaque.count);
@@ -658,17 +660,148 @@ export class Preview {
     const pu = pp.u;
     if (pu.u_scene) gl.uniform1i(pu.u_scene, 0);
     if (pu.u_depth) gl.uniform1i(pu.u_depth, 1);
-    if (pu.u_projInv) gl.uniformMatrix4fv(pu.u_projInv, false, m4.invert(proj));
-    if (pu.u_res) gl.uniform2f(pu.u_res, this.w, this.h);
-    if (pu.u_time) gl.uniform1f(pu.u_time, time);
-    if (pu.u_dayTime) gl.uniform1f(pu.u_dayTime, this.dayTime);
-    if (pu.u_rain) gl.uniform1f(pu.u_rain, this.rain);
-    this.applySettings(pu);
+    this.setCommon(pu, f);
     gl.bindVertexArray(this.emptyVao);
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, null);
     gl.activeTexture(gl.TEXTURE0);
+
+    if (this.np && this.onNodePreviews) {
+      const now = performance.now();
+      const envKey = `${this.dayTime}|${this.rain}`;
+      if (envKey !== this.npEnvKey) {
+        this.npEnvKey = envKey;
+        this.np.dirty = true;
+      }
+      if (this.np.dirty || (this.np.animated && now - this.np.last > 110)) {
+        this.np.dirty = false;
+        this.np.last = now;
+        this.renderNodePreviews(f);
+      }
+    }
+  }
+
+  // ----------------------------------------------------------- node previews
+  // Every node gets its own thumbnail, like Unity Shader Graph. All of them are
+  // drawn into one offscreen grid, read back once, and handed to the editor.
+
+  setNodePreviews(items, tile) {
+    if (!this.ok) return;
+    const gl = this.gl;
+    this.npCache = this.npCache || new Map();
+    const keep = new Set();
+    const list = [];
+    for (const it of items || []) {
+      keep.add(it.src);
+      let entry = this.npCache.get(it.src);
+      if (!entry) {
+        try {
+          entry = { prog: link(gl, FULLSCREEN_VS, it.src) };
+        } catch (e) {
+          entry = { error: String(e.message || e) };
+        }
+        this.npCache.set(it.src, entry);
+      }
+      list.push({ id: it.id, animated: it.animated, ...entry });
+    }
+    for (const [src, entry] of this.npCache) {
+      if (!keep.has(src)) {
+        if (entry.prog) gl.deleteProgram(entry.prog.p);
+        this.npCache.delete(src);
+      }
+    }
+    this.np = list.length ? { items: list, tile, dirty: true, last: 0, animated: list.some((x) => x.animated) } : null;
+  }
+
+  invalidateNodePreviews() {
+    if (this.np) this.np.dirty = true;
+  }
+
+  renderNodePreviews(f) {
+    const gl = this.gl;
+    const W = 160, H = 96, cols = 6;
+    const items = this.np.items;
+    const rows = Math.ceil(items.length / cols);
+    const gw = cols * W, gh = rows * H;
+    if (!this.npFbo || this.npW !== gw || this.npH !== gh) {
+      this.npFbo = this.npFbo || gl.createFramebuffer();
+      this.npTex = this.npTex || gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, this.npTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, gw, gh, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.npFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, this.npTex, 0);
+      this.npW = gw;
+      this.npH = gh;
+      this.npBuf = new Uint8Array(gw * gh * 4);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.npFbo);
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.BLEND);
+    gl.clearColor(0.08, 0.09, 0.11, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindVertexArray(this.emptyVao);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.atlas);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.colorTex);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.depthTex);
+    const tile = this.np.tile;
+    items.forEach((it, i) => {
+      if (!it.prog) return;
+      gl.viewport((i % cols) * W, Math.floor(i / cols) * H, W, H);
+      gl.useProgram(it.prog.p);
+      const u = it.prog.u;
+      if (u.u_atlas) gl.uniform1i(u.u_atlas, 0);
+      if (u.u_scene) gl.uniform1i(u.u_scene, 1);
+      if (u.u_depth) gl.uniform1i(u.u_depth, 2);
+      if (u.u_tileOrigin) gl.uniform2fv(u.u_tileOrigin, tile.origin);
+      if (u.u_tileSize) gl.uniform1f(u.u_tileSize, tile.size);
+      if (u.u_tileRes) gl.uniform2f(u.u_tileRes, W, H);
+      this.setCommon(u, f);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    });
+    gl.readPixels(0, 0, gw, gh, gl.RGBA, gl.UNSIGNED_BYTE, this.npBuf);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    gl.activeTexture(gl.TEXTURE0);
+    const out = new Map();
+    items.forEach((it, i) => {
+      if (!it.prog) {
+        out.set(it.id, { error: it.error });
+        return;
+      }
+      const tx = (i % cols) * W, ty = Math.floor(i / cols) * H;
+      const img = new ImageData(W, H);
+      for (let y = 0; y < H; y++) {
+        const src = ((ty + (H - 1 - y)) * gw + tx) * 4;
+        img.data.set(this.npBuf.subarray(src, src + W * 4), y * W * 4);
+      }
+      out.set(it.id, { img });
+    });
+    this.onNodePreviews(out);
+  }
+
+  // Uniforms every generated shader can read (the bg_* builtins).
+  setCommon(u, f) {
+    const gl = this.gl;
+    if (u.u_cam) gl.uniform3fv(u.u_cam, f.eye);
+    if (u.u_camFwd) gl.uniform3fv(u.u_camFwd, f.fwd);
+    if (u.u_sunDir) gl.uniform3fv(u.u_sunDir, f.env.sun);
+    if (u.u_skyColor) gl.uniform3fv(u.u_skyColor, f.env.sky);
+    if (u.u_fogColor) gl.uniform3fv(u.u_fogColor, f.env.fog);
+    if (u.u_res) gl.uniform2f(u.u_res, this.w, this.h);
+    if (u.u_time) gl.uniform1f(u.u_time, f.time);
+    if (u.u_dayTime) gl.uniform1f(u.u_dayTime, this.dayTime);
+    if (u.u_rain) gl.uniform1f(u.u_rain, this.rain);
+    if (u.u_projInv) gl.uniformMatrix4fv(u.u_projInv, false, f.projInv);
+    this.applySettings(u);
   }
 
   applySettings(u) {

@@ -1,9 +1,9 @@
 // BlockGraph app shell: wires the node canvas, the live preview, the inspector,
 // the library, presets, undo, saving and the Iris pack export together.
 
-import { NODE_DEFS, CATEGORIES, BINDS, rgbToHex, hexToLinear } from './nodes.js';
+import { NODE_DEFS, CATEGORIES, BINDS, rgbToHex, hexToLinear, normStops } from './nodes.js';
 import { defaultParams, collectSettings, inferTypes } from './codegen.js';
-import { buildPreview, buildIris, sliderValues } from './targets.js';
+import { buildPreview, buildIris, sliderValues, buildNodePreview, previewableNode, PREVIEW_TILE, choiceOptions, choiceIndex } from './targets.js';
 import { GraphEditor } from './editor.js';
 import { Preview } from './preview.js';
 import { PRESETS } from './presets.js';
@@ -11,6 +11,8 @@ import { makeZip } from './zip.js';
 
 const STORE_KEY = 'blockgraph:v1:state';
 const WELCOME_KEY = 'blockgraph:v1:welcomed';
+const PREVIEWS_KEY = 'blockgraph:v1:previews';
+const COLLAPSED_KEY = 'blockgraph:v1:collapsed';
 const $ = (s, r = document) => r.querySelector(s);
 const el = (tag, cls, text) => {
   const e = document.createElement(tag);
@@ -49,6 +51,10 @@ const state = {
 };
 let history = [];
 let historyIndex = -1;
+let showPreviews = true;
+let previewImages = new Map();
+const previewErrors = new Map();
+let collapsedCats = new Set();
 let clipboard = null;
 let lastPointer = null;
 
@@ -131,6 +137,8 @@ function loadInitial() {
     } catch { /* fall through to the default preset */ }
   }
   state.graphs = PRESETS[0].build();
+  state.graphs.terrain.needsLayout = true;
+  state.graphs.post.needsLayout = true;
 }
 
 // ------------------------------------------------------------- compile
@@ -156,10 +164,52 @@ function compileNow() {
   editor.setErrors(lastErrors.filter((e) => e.graph === state.kind || e.graph === null));
   renderStatus();
   renderTabsBadges();
+  updateNodePreviews();
 }
 
 function liveSettings() {
   if (preview.ok) preview.setSettings(collectSettings(state.graphs).settings);
+}
+
+// ---------------------------------------------------------- node previews
+
+function updateNodePreviews() {
+  if (!preview.ok) return;
+  const g = state.graphs[state.kind];
+  if (!showPreviews) {
+    preview.setNodePreviews([], PREVIEW_TILE);
+    return;
+  }
+  const items = [];
+  for (const n of g.nodes) {
+    if (!previewableNode(NODE_DEFS[n.type])) continue;
+    try {
+      const np = buildNodePreview(state.graphs, state.kind, n.id);
+      items.push({ id: n.id, src: np.src, animated: np.animated });
+    } catch { /* a broken node simply gets no thumbnail */ }
+  }
+  const ids = new Set(g.nodes.map((n) => n.id));
+  previewImages = new Map([...previewImages].filter(([id]) => ids.has(id)));
+  preview.setNodePreviews(items, PREVIEW_TILE);
+}
+
+function paintPreviews() {
+  for (const [id, r] of previewImages) {
+    const c = editor.layer.querySelector(`.node[data-id="${id}"] canvas.node-preview`);
+    if (!c) continue;
+    const ctx = c.getContext('2d');
+    if (r.img) {
+      ctx.putImageData(r.img, 0, 0);
+    } else {
+      ctx.fillStyle = '#2a1214';
+      ctx.fillRect(0, 0, c.width, c.height);
+      ctx.fillStyle = '#ff9a9a';
+      ctx.font = '600 13px system-ui, sans-serif';
+      ctx.fillText('Code error', 12, 24);
+      ctx.font = '11px system-ui, sans-serif';
+      ctx.fillText('Details in the inspector', 12, 42);
+    }
+  }
 }
 
 // -------------------------------------------------------------- toasts
@@ -209,10 +259,24 @@ const editor = new GraphEditor($('#canvas'), {
   allSettingNames() {
     return [...collectSettings(state.graphs).settings.keys()];
   },
+  showPreviews: () => showPreviews,
+  onRendered: () => paintPreviews(),
   toast,
 });
 
 const preview = new Preview($('#preview'));
+preview.onNodePreviews = (map) => {
+  previewImages = map;
+  let changed = false;
+  for (const [id, r] of map) {
+    const before = previewErrors.get(id);
+    if (r.error) previewErrors.set(id, r.error);
+    else previewErrors.delete(id);
+    if (before !== previewErrors.get(id)) changed = true;
+  }
+  paintPreviews();
+  if (changed && editor.selection.size === 1 && previewErrors.has([...editor.selection][0])) renderInspector();
+};
 if (!preview.ok) {
   const m = $('#preview-msg');
   m.hidden = false;
@@ -220,6 +284,19 @@ if (!preview.ok) {
 }
 
 // ---------------------------------------------------------------- tabs
+
+// Spreads out a freshly loaded graph once its nodes (and previews) have a size.
+function layoutIfNeeded() {
+  const g = state.graphs[state.kind];
+  if (!g.needsLayout) return;
+  requestAnimationFrame(() => {
+    if (editor.graph !== g) return;
+    editor.resolveOverlaps();
+    delete g.needsLayout;
+    editor.frameAll(true);
+    save();
+  });
+}
 
 function switchGraph(kind) {
   if (kind === state.kind && editor.graph === state.graphs[kind]) return;
@@ -236,6 +313,9 @@ function switchGraph(kind) {
   renderLibrary();
   renderInspector();
   editor.setErrors(lastErrors.filter((e) => e.graph === kind || e.graph === null));
+  previewImages = new Map();
+  updateNodePreviews();
+  layoutIfNeeded();
   save();
 }
 
@@ -270,9 +350,22 @@ function renderLibrary() {
     if (!defs.length) continue;
     total += defs.length;
     const sec = el('section', 'lib-cat');
-    const h = el('h3', null, cat.label);
+    const h = el('h3');
+    const open = !!q || !collapsedCats.has(cat.id);
+    const tog = el('button', 'lib-cat-toggle');
+    tog.type = 'button';
+    tog.setAttribute('aria-expanded', open ? 'true' : 'false');
+    tog.append(el('span', 'lib-caret'), el('span', null, cat.label), el('span', 'lib-count', String(defs.length)));
+    tog.addEventListener('click', () => {
+      if (collapsedCats.has(cat.id)) collapsedCats.delete(cat.id);
+      else collapsedCats.add(cat.id);
+      store.set(COLLAPSED_KEY, JSON.stringify([...collapsedCats]));
+      renderLibrary();
+    });
+    h.append(tog);
     sec.append(h);
     const ul = el('div', 'lib-items');
+    ul.hidden = !open;
     for (const d of defs) {
       const b = el('button', `lib-item cat-${d.cat.toLowerCase()}`);
       b.type = 'button';
@@ -516,6 +609,25 @@ function renderNodeInspector(box, node) {
       sec.append(field('Default value', rr, 'Players start here. The preview uses it too.'));
       const { vals } = sliderValues(P);
       sec.append(el('p', 'field-hint', `Iris will offer ${vals.length} steps from ${vals[0]} to ${vals[vals.length - 1]}.`));
+    } else if (def.setting === 'choice') {
+      const opts = el('input', 'in-text');
+      opts.value = P.options;
+      opts.addEventListener('change', () => {
+        node.params.options = choiceOptions({ options: opts.value }).join(', ');
+        node.params.value = choiceIndex({ ...P, options: node.params.options, value: node.params.value ?? P.value });
+        commit();
+        renderInspector();
+      });
+      sec.append(field('Choices', opts, 'Separate them with commas. The node outputs 0 for the first, 1 for the second, and so on.'));
+      const sel = el('select', 'in-select');
+      choiceOptions(P).forEach((o, i) => {
+        const opt = el('option', null, `${i} · ${o}`);
+        opt.value = String(i);
+        sel.append(opt);
+      });
+      sel.value = String(choiceIndex(P));
+      sel.addEventListener('change', () => { node.params.value = Number(sel.value); liveSettings(); commit(); });
+      sec.append(field('Default choice', sel));
     } else {
       const sw = el('label', 'ctl-switch');
       const cb = el('input');
@@ -556,6 +668,44 @@ function renderNodeInspector(box, node) {
         cb.addEventListener('change', () => { node.params[p.id] = cb.checked; commit(); });
         sw.append(cb, el('span', 'switch'), el('span', null, p.name));
         sec.append(sw);
+      } else if (p.kind === 'swizzle') {
+        const t = el('input', 'in-text mono');
+        t.value = P[p.id];
+        t.maxLength = 4;
+        t.spellcheck = false;
+        t.addEventListener('change', () => { node.params[p.id] = t.value; commit(); renderInspector(); });
+        sec.append(field(p.name, t, 'Up to four of x y z w (or r g b a). The output size follows the length.'));
+      } else if (p.kind === 'note') {
+        const ta = el('textarea', 'in-code');
+        ta.value = P[p.id];
+        ta.rows = 6;
+        ta.addEventListener('change', () => { node.params[p.id] = ta.value; pushHistory(); editor.render(); });
+        sec.append(field(p.name, ta));
+      } else if (p.kind === 'code') {
+        const ta = el('textarea', 'in-code mono');
+        ta.value = P[p.id];
+        ta.rows = 9;
+        ta.spellcheck = false;
+        ta.addEventListener('keydown', (e) => {
+          if (e.key === 'Tab') {
+            e.preventDefault();
+            const a = ta.selectionStart;
+            ta.setRangeText('  ', a, ta.selectionEnd, 'end');
+          }
+        });
+        const apply = el('button', 'btn ghost small', 'Apply code');
+        apply.type = 'button';
+        apply.addEventListener('click', () => { node.params[p.id] = ta.value; commit(); });
+        ta.addEventListener('change', () => { node.params[p.id] = ta.value; commit(); });
+        const outT = P.outType || 'vec3';
+        sec.append(field(p.name, ta, `Becomes: ${outT} bg_custom_${node.id}(vec4 a, vec4 b, vec4 c, vec4 d, float time) { … }`), apply);
+        const log = previewErrors.get(node.id) || (glErrors && [glErrors.terrainError, glErrors.postError].filter(Boolean).join('\n'));
+        if (log) {
+          const lines = log.split('\n').filter((l) => /ERROR/i.test(l)).slice(0, 4);
+          if (lines.length) box.append(el('pre', 'insp-error mono', lines.join('\n')));
+        }
+      } else if (p.kind === 'gradient') {
+        sec.append(gradientEditor(normStops(P[p.id]), (stops) => { node.params[p.id] = stops; commit(); renderInspector(); }));
       }
     }
     box.append(sec);
@@ -631,6 +781,41 @@ function renderNodeInspector(box, node) {
   }
 }
 
+function gradientEditor(stops, onCommit) {
+  const wrap = el('div', 'grad-editor');
+  const strip = el('div', 'ctl-gradient big');
+  strip.style.background = `linear-gradient(90deg, ${stops.map((s) => `${s.c} ${s.t * 100}%`).join(', ')})`;
+  wrap.append(strip);
+  stops.forEach((s, i) => {
+    const row = el('div', 'grad-row');
+    const c = el('input', 'in-color');
+    c.type = 'color';
+    c.value = s.c;
+    c.setAttribute('aria-label', `Stop ${i + 1} colour`);
+    c.addEventListener('change', () => { stops[i].c = c.value; onCommit(stops); });
+    const pos = numInput(s.t, (v) => { stops[i].t = Math.max(0, Math.min(1, v)); onCommit(stops); }, 0.05);
+    pos.setAttribute('aria-label', `Stop ${i + 1} position`);
+    const del = el('button', 'btn icon small', '×');
+    del.type = 'button';
+    del.setAttribute('aria-label', `Remove stop ${i + 1}`);
+    del.disabled = stops.length <= 2;
+    del.addEventListener('click', () => { stops.splice(i, 1); onCommit(stops); });
+    row.append(c, pos, del);
+    wrap.append(row);
+  });
+  const add = el('button', 'btn ghost small', 'Add stop');
+  add.type = 'button';
+  add.disabled = stops.length >= 8;
+  add.addEventListener('click', () => {
+    const last = stops[stops.length - 1];
+    const prev = stops[stops.length - 2] || last;
+    stops.push({ c: last.c, t: Math.min(1, (prev.t + last.t) / 2 + 0.25) });
+    onCommit(stops);
+  });
+  wrap.append(add);
+  return wrap;
+}
+
 function renderGraphInspector(box) {
   const kind = state.kind;
   box.append(el('p', 'insp-eyebrow', 'Graph'), el('h2', 'insp-title', `${GRAPH_INFO[kind].name} graph`), el('p', 'insp-desc', GRAPH_INFO[kind].caption));
@@ -647,7 +832,7 @@ function renderGraphInspector(box) {
       const b = el('button', 'iris-option');
       b.type = 'button';
       const sv = sliderValues(s);
-      const val = s.kind === 'toggle' ? (s.value ? 'ON' : 'OFF') : sv.value.toFixed(sv.dec);
+      const val = s.kind === 'toggle' ? (s.value ? 'ON' : 'OFF') : s.kind === 'choice' ? choiceOptions(s)[choiceIndex(s)] : sv.value.toFixed(sv.dec);
       b.append(el('span', null, `${s.label || name}: `), el('span', `iris-val ${s.kind === 'toggle' ? (s.value ? 'on' : 'off') : ''}`, val));
       if (s.kind === 'slider') {
         const pct = (sv.value - s.min) / ((s.max - s.min) || 1);
@@ -853,6 +1038,11 @@ function openExport() {
   nameField.append(hint);
   wrap.append(nameField);
 
+  if (glErrors) {
+    const w = el('div', 'insp-error');
+    w.textContent = 'The preview shader does not compile (often a typo in a Custom Function). Iris will fail on the same code, so fix it before exporting.';
+    wrap.append(w);
+  }
   if (errors.length) {
     const warn = el('div', 'insp-error');
     warn.textContent = `Fix ${errors.length} problem${errors.length > 1 ? 's' : ''} first, or the pack may not load: ${errors[0].msg}`;
@@ -913,7 +1103,7 @@ function openWhy() {
     ['Real packs, not a toy', 'Export writes an actual Iris shader pack for Minecraft 1.21.11 on Fabric. Drop the zip in shaderpacks and it runs.'],
     ['Players get a settings menu', 'Slider and On/Off nodes become options under Iris → Shader Settings, without hand-editing shaders.properties.'],
     ['You learn the real thing', 'View code shows the GLSL your graph makes, with each line tagged by node. It is a gentle way into shader programming.'],
-    ['Skills that carry over', 'Unity Shader Graph, Unreal materials, Blender and Godot all work like this. What you learn here transfers.'],
+    ['Works like Unity Shader Graph', 'Live previews on every node, a Lit output with Normal, Smoothness and Metallic, Custom Function, Sticky Notes, and Unity\u2019s node families from Math to UV. What you learn here transfers to Unity, Unreal, Blender and Godot.'],
   ];
   for (const [h, p] of points) {
     const c = el('div', 'why-card');
@@ -926,6 +1116,7 @@ function openWhy() {
   const ul = el('ul');
   for (const t of [
     'Shadows, reflections and volumetric light. Those need extra passes that are not wired up yet.',
+    'From Unity: Sub Graphs, matrix nodes, texture and cubemap asset nodes, parallax mapping and object or reflection probe data. Minecraft has no meshes, objects or probes to feed those.',
     'Entities, the sky and particles keep a simple vanilla-style shader. The graphs cover blocks and the screen.',
     'The preview imitates Minecraft lighting with a small scene. In game, your resource pack and lightmap are used.',
   ]) ul.append(el('li', null, t));
@@ -961,10 +1152,13 @@ function renderPresetMenu() {
 
 function applyPreset(p) {
   state.graphs = p.build();
+  state.graphs.terrain.needsLayout = true;
+  state.graphs.post.needsLayout = true;
   state.presetId = p.id;
   state.views = { terrain: null, post: null };
   editor.load(state.graphs[state.kind], null);
   requestAnimationFrame(() => editor.frameAll(true));
+  layoutIfNeeded();
   pushHistory();
   refreshAll();
   toast(`Loaded "${p.name}". Undo brings your old graph back.`);
@@ -1013,6 +1207,19 @@ function bindUI() {
   $('#zoom-in').addEventListener('click', () => editor.zoomBy(1.2));
   $('#zoom-out').addEventListener('click', () => editor.zoomBy(1 / 1.2));
   $('#zoom-fit').addEventListener('click', () => editor.frameAll(true));
+  const pvBtn = $('#toggle-previews');
+  const syncPvBtn = () => {
+    pvBtn.setAttribute('aria-pressed', showPreviews ? 'true' : 'false');
+    pvBtn.classList.toggle('on', showPreviews);
+  };
+  syncPvBtn();
+  pvBtn.addEventListener('click', () => {
+    showPreviews = !showPreviews;
+    store.set(PREVIEWS_KEY, showPreviews ? '1' : '0');
+    syncPvBtn();
+    editor.render();
+    updateNodePreviews();
+  });
   $('#modal-close').addEventListener('click', closeModal);
   $('#modal').addEventListener('click', (e) => { if (e.target.id === 'modal') closeModal(); });
 
@@ -1125,6 +1332,8 @@ function bindUI() {
 
 // ------------------------------------------------------------------- boot
 
+showPreviews = store.get(PREVIEWS_KEY) !== '0';
+try { collapsedCats = new Set(JSON.parse(store.get(COLLAPSED_KEY) || '[]')); } catch { collapsedCats = new Set(); }
 loadInitial();
 bindUI();
 renderPresetMenu();

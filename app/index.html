@@ -72,10 +72,16 @@
     <div class="canvas" id="canvas" tabindex="0" aria-label="Node graph canvas"></div>
     <div class="hud-top">
       <p class="graph-caption" id="graph-caption"></p>
+      <div class="hud-right">
+      <button class="hud-btn" id="toggle-previews" type="button" aria-pressed="true" title="Show a live preview on every node">
+        <svg viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="10" rx="2"/><circle cx="8" cy="8" r="2.4"/></svg>
+        Node previews
+      </button>
       <div class="zoom-ctl" role="group" aria-label="Zoom">
         <button id="zoom-out" type="button" aria-label="Zoom out">−</button>
         <button id="zoom-fit" type="button">Fit</button>
         <button id="zoom-in" type="button" aria-label="Zoom in">+</button>
+      </div>
       </div>
     </div>
     <div class="welcome" id="welcome" hidden>

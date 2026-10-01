@@ -48,6 +48,13 @@ export function cast(expr, from, to) {
 
 export const varName = (nodeId, port) => `n${nodeId}_${port}`;
 
+// An output's type is fixed ('vec3'), follows the inputs ('dyn'), or is picked
+// by a parameter (a function of the node's params, e.g. Swizzle).
+export function outputType(def, o, T, node) {
+  if (typeof o.type === 'function') return o.type({ ...defaultParams(def), ...(node?.params || {}) }) || 'float';
+  return o.type === 'dyn' ? T : o.type;
+}
+
 function indexLinks(graph) {
   const byTarget = new Map();
   for (const l of graph.links) byTarget.set(`${l.to.node}:${l.to.port}`, l);
@@ -88,7 +95,7 @@ export function inferTypes(graph, kind) {
       ins[p.id] = p.type === 'dyn' ? T : p.type === 'dynOrFloat' ? (raw[p.id] === 'float' ? 'float' : T) : p.type;
     }
     const outs = {};
-    for (const o of def.outputs) outs[o.id] = o.type === 'dyn' ? T : o.type;
+    for (const o of def.outputs) outs[o.id] = outputType(def, o, T, node);
     visiting.delete(id);
     const r = { in: ins, out: outs, T };
     memo.set(id, r);
@@ -100,20 +107,23 @@ export function inferTypes(graph, kind) {
 
 // Compiles one stage of one graph.
 // Returns { lines, outputs: {portId: expr}, errors: [{node, msg}], settings: Map, used: Set }
-export function compileStage(graph, kind, stage) {
+// With opts.root = nodeId, compiles just what that node needs and returns its
+// first output (used for the live preview on each node).
+export function compileStage(graph, kind, stage, opts = {}) {
   const nodes = new Map(graph.nodes.map((n) => [n.id, n]));
   const links = indexLinks(graph);
   const lines = [];
   const errors = [];
   const settings = new Map();
+  const functions = new Map();
   const emitted = new Map();
   const visiting = new Set();
   const used = new Set();
 
   const outNode = graph.nodes.find((n) => NODE_DEFS[n.type]?.isOutput && NODE_DEFS[n.type].graphs.includes(kind));
-  if (!outNode) {
+  if (!outNode && opts.root == null) {
     errors.push({ node: null, msg: 'This graph has no output node.' });
-    return { lines, outputs: {}, errors, settings, used };
+    return { lines, outputs: {}, errors, settings, used, functions: [] };
   }
 
   function rawInput(node, def, p) {
@@ -185,12 +195,15 @@ export function compileStage(graph, kind, stage) {
       errors.push({ node: id, msg: `Could not build ${def.title}: ${e.message}` });
       res = { out: {} };
     }
-    const outs = typeof res === 'string' ? { out: res } : res.out || {};
+    // A node that returns a single expression feeds its first output.
+    const outs = typeof res === 'string' ? { [def.outputs[0]?.id || 'out']: res } : res.out || {};
+    if (res && res.fn) functions.set(res.fn.key, res.fn.code);
     if (res && res.pre) lines.push(res.pre);
     const types = {};
     for (const o of def.outputs) {
-      const t = o.type === 'dyn' ? T : o.type;
+      const t = outputType(def, o, T, node);
       types[o.id] = t;
+      if (outs[o.id] === undefined) errors.push({ node: id, msg: `${def.title} produced no value for its ${o.name} output.` });
       lines.push(`${t} ${varName(id, o.id)} = ${outs[o.id] ?? literal(t, 0)};`);
     }
     visiting.delete(id);
@@ -199,11 +212,22 @@ export function compileStage(graph, kind, stage) {
     return info;
   }
 
+  if (opts.root != null) {
+    const info = visit(opts.root);
+    const def = NODE_DEFS[nodes.get(opts.root)?.type];
+    const port = opts.port || def?.outputs[0]?.id;
+    const type = info?.types[port] || 'float';
+    return { lines, value: info ? varName(opts.root, port) : '0.0', type, errors, settings, used, functions: [...functions.values()] };
+  }
+
   const outDef = NODE_DEFS[outNode.type];
   const ports = outDef.inputs.filter((p) => (p.stage || 'fragment') === stage);
   const { I } = resolveInputs(outNode, outDef, ports);
   used.add(outNode.id);
-  return { lines, outputs: I, errors, settings, used, outNode, outParams: { ...defaultParams(outDef), ...(outNode.params || {}) } };
+  return {
+    lines, outputs: I, errors, settings, used, outNode, functions: [...functions.values()],
+    outParams: { ...defaultParams(outDef), ...(outNode.params || {}) },
+  };
 }
 
 export function defaultParams(def) {
