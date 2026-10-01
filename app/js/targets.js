@@ -3,8 +3,8 @@
 //  - "iris":    an Iris / OptiFine-format shader pack (GLSL 330 compatibility)
 // It also builds the tiny shaders behind each node's own preview thumbnail.
 
-import { compileStage, collectSettings } from './codegen.js';
-import { GLSL_HELPERS, GLSL_FRAG_HELPERS, NODE_DEFS, texSampler } from './nodes.js';
+import { compileStage, collectSettings, defaultParams } from './codegen.js';
+import { GLSL_HELPERS, GLSL_FRAG_HELPERS, NODE_DEFS, texSampler, ID_GROUPS } from './nodes.js';
 
 export const BLOCK_IDS = { leaves: 10001, plants: 10002, water: 10003 };
 
@@ -72,14 +72,24 @@ const indent = (lines, pad = '\t') => lines.join('\n').split('\n').map((l) => (l
 
 // ------------------------------------------------------------- compile both
 
+// An Items & Entities graph that only holds its output: looks like vanilla.
+export function defaultEntityGraph() {
+  return { nodes: [{ id: 1, type: 'entityOutput', x: 360, y: 120, params: defaultParams(NODE_DEFS.entityOutput), defaults: {} }], links: [], nextId: 2 };
+}
+
 export function compileAll(graphs) {
   const tFrag = compileStage(graphs.terrain, 'terrain', 'fragment');
   const tVert = compileStage(graphs.terrain, 'terrain', 'vertex');
+  const eg = graphs.entity || defaultEntityGraph();
+  const eFrag = compileStage(eg, 'entity', 'fragment');
+  const eVert = compileStage(eg, 'entity', 'vertex');
   const post = compileStage(graphs.post, 'post', 'fragment');
   const { settings, problems } = collectSettings(graphs);
   const errors = [
     ...tFrag.errors.map((e) => ({ ...e, graph: 'terrain' })),
     ...tVert.errors.map((e) => ({ ...e, graph: 'terrain' })),
+    ...eFrag.errors.map((e) => ({ ...e, graph: 'entity' })),
+    ...eVert.errors.map((e) => ({ ...e, graph: 'entity' })),
     ...post.errors.map((e) => ({ ...e, graph: 'post' })),
     ...problems.map((e) => ({ ...e, graph: null })),
   ];
@@ -90,7 +100,7 @@ export function compileAll(graphs) {
     seen.add(k);
     return true;
   });
-  return { tFrag, tVert, post, settings, errors: uniqErrors };
+  return { tFrag, tVert, eFrag, eVert, post, settings, errors: uniqErrors };
 }
 
 // ---------------------------------------------------------------- builtins
@@ -119,6 +129,8 @@ const COMMON_TIME = (pv) => [
   `vec3 bg_camFwd = ${pv ? 'u_camFwd' : '-gbufferModelViewInverse[2].xyz'};`,
   `vec2 bg_resolution = ${pv ? 'u_res' : 'vec2(viewWidth, viewHeight)'};`,
   'float bg_aspect = bg_resolution.x / bg_resolution.y;',
+  `int bg_heldItemId = ${pv ? 'u_heldItem' : 'heldItemId'};`,
+  `int bg_heldItemId2 = ${pv ? 'u_heldItem2' : 'heldItemId2'};`,
 ];
 
 function terrainBuiltins(target, stage) {
@@ -131,7 +143,7 @@ function terrainBuiltins(target, stage) {
     `vec2 bg_uv = ${src.uv};`,
     ...COMMON_TIME(pv),
     `vec3 bg_worldPos = ${src.pos};`,
-    `vec3 bg_normal = normalize(${src.n});`,
+    `vec3 bg_normal = bg_safeNormalize(${src.n});`,
     `vec4 bg_vcolor = ${src.col};`,
   ];
   if (pv) {
@@ -156,7 +168,56 @@ function terrainBuiltins(target, stage) {
   lines.push(
     `float bg_plantTop = ${src.top};`,
     `float bg_viewDist = ${src.dist};`,
-    'vec3 bg_viewDir = normalize(bg_camPos - bg_worldPos);',
+    'vec3 bg_viewDir = bg_safeNormalize(bg_camPos - bg_worldPos);',
+    'vec2 bg_faceUV = bg_faceUVOf(bg_worldPos, bg_normal);',
+  );
+  return lines.join('\n');
+}
+
+// Builtins for the Items & Entities graph. `prog` is the Iris program family:
+// 'hand' (first person), 'entity' (gbuffers_entities) or 'block' (block entities).
+// Only standard vertex attributes are read, so modded meshes (OBJ models drawn
+// through the item and block paths) work as long as they carry a normal.
+function entityBuiltins(target, stage, prog) {
+  const pv = target === 'preview';
+  const v = stage === 'vertex';
+  const src = pv
+    ? { uv: v ? 'a_uv' : 'v_uv', pos: v ? 'wPos' : 'v_world', n: v ? 'wNormal' : 'v_normal', col: v ? 'a_color' : 'v_color', lm: v ? 'a_lm' : 'v_lm', dist: v ? 'length(wPos - u_cam)' : 'v_dist' }
+    : { uv: 'texcoord', pos: v ? 'wPos' : 'worldPos', n: v ? 'wNormal' : 'worldNormal', col: 'glcolor', dist: v ? 'length(playerPos.xyz)' : 'viewDist' };
+  const lines = [
+    `vec2 bg_uv = ${src.uv};`,
+    ...COMMON_TIME(pv),
+    `vec3 bg_worldPos = ${src.pos};`,
+    `vec3 bg_normal = bg_safeNormalize(${src.n});`,
+    `vec4 bg_vcolor = ${src.col};`,
+  ];
+  if (pv) {
+    lines.push(
+      `vec2 bg_lm = ${src.lm};`,
+      'vec3 bg_light = bg_lightmapColor(bg_lm, bg_daylight);',
+      'int bg_itemId = u_itemId;',
+      'int bg_entityId = u_entityId;',
+      'int bg_blockEntityId = u_blockEntityId;',
+      'float bg_isHeld = u_isHeld;',
+      'float bg_isEntity = u_isEntity;',
+      'float bg_isBlockEntity = u_isBlockEntity;',
+    );
+  } else {
+    lines.push(
+      'vec2 bg_lm = clamp((lmcoord - 0.03125) * 1.06667, 0.0, 1.0);',
+      `vec3 bg_light = ${v ? 'textureLod(lightmap, lmcoord, 0.0).rgb' : 'texture(lightmap, lmcoord).rgb'};`,
+      'int bg_itemId = currentRenderedItemId;',
+      'int bg_entityId = entityId;',
+      'int bg_blockEntityId = blockEntityId;',
+      `float bg_isHeld = ${prog === 'hand' ? '1.0' : '0.0'};`,
+      `float bg_isEntity = ${prog === 'entity' ? '1.0' : '0.0'};`,
+      `float bg_isBlockEntity = ${prog === 'block' ? '1.0' : '0.0'};`,
+    );
+  }
+  lines.push(
+    'float bg_plantTop = 0.0;',
+    `float bg_viewDist = ${src.dist};`,
+    'vec3 bg_viewDir = bg_safeNormalize(bg_camPos - bg_worldPos);',
     'vec2 bg_faceUV = bg_faceUVOf(bg_worldPos, bg_normal);',
   );
   return lines.join('\n');
@@ -168,11 +229,12 @@ function postBuiltins(target) {
 }
 
 // The end of every block shader: Unity-style surface inputs become a colour.
-function surfaceToColor(o, params, target) {
+function surfaceToColor(o, params, target, opts = {}) {
   const lit = params.lighting === 'Lit';
   const fog = params.fog !== false;
   const lines = [
     `vec3 bg_col = ${o.color};`,
+    ...(opts.flash ? [`bg_col = mix(bg_col, ${opts.flash}.rgb, ${opts.flash}.a); // hurt / creeper flash`] : []),
     `float bg_alpha = ${o.alpha};`,
     `vec3 bg_lit = ${o.light};`,
     `float bg_emit = ${o.emission};`,
@@ -196,6 +258,11 @@ function surfaceToColor(o, params, target) {
       'vec3 bg_F = bg_F0 + (1.0 - bg_F0) * pow(1.0 - max(dot(bg_N, bg_viewDir), 0.0), 5.0);',
       'float bg_spec = pow(max(dot(bg_N, bg_H), 0.0), bg_exp) * (bg_exp + 8.0) / 25.13 * step(0.0, bg_ndl);',
       'rgb += bg_F * bg_spec * bg_sm * bg_sunVis * vec3(1.0, 0.95, 0.85);',
+      '// Cheap sky reflection for metals: the sky colour above, the fog colour at the horizon.',
+      'vec3 bg_R = reflect(-bg_viewDir, bg_N);',
+      'float bg_skyVis = bg_lm.y * bg_lm.y * (0.3 + 0.7 * bg_daylight);',
+      'vec3 bg_env = mix(bg_fogColor, bg_skyColor, smoothstep(-0.15, 0.55, bg_R.y)) * mix(0.35, 1.0, step(0.0, bg_R.y));',
+      'rgb += bg_F * bg_env * bg_skyVis * bg_mt * (0.25 + 0.75 * bg_sm);',
     );
   }
   lines.push('rgb += bg_col * bg_emit;');
@@ -217,7 +284,16 @@ uniform vec3 u_fogColor;
 uniform vec2 u_res;
 uniform float u_time;
 uniform float u_dayTime;
-uniform float u_rain;`;
+uniform float u_rain;
+uniform int u_heldItem;
+uniform int u_heldItem2;`;
+
+const PREVIEW_ENTITY_UNIFORMS = `uniform int u_itemId;
+uniform int u_entityId;
+uniform int u_blockEntityId;
+uniform float u_isHeld;
+uniform float u_isEntity;
+uniform float u_isBlockEntity;`;
 
 export function buildPreview(graphs) {
   const c = compileAll(graphs);
@@ -327,13 +403,88 @@ ${indent(c.post.lines.length ? c.post.lines : ['// (no nodes)'], '  ')}
 }
 `;
 
-  return { terrainVS, terrainFS, postFS, settings: c.settings, errors: c.errors };
+  const eo = c.eFrag.outputs;
+  const entityVS = `#version 300 es
+precision highp float;
+precision highp int;
+in vec3 a_pos;
+in vec3 a_normal;
+in vec2 a_uv;
+in vec4 a_color;
+in vec2 a_lm;
+in float a_block;
+in float a_top;
+uniform mat4 u_viewProj;
+uniform mat4 u_model;
+uniform sampler2D u_atlas;
+${PREVIEW_COMMON_UNIFORMS}
+${PREVIEW_ENTITY_UNIFORMS}
+${settingUniforms}
+out vec2 v_uv;
+out vec2 v_lm;
+out vec4 v_color;
+out vec3 v_world;
+out vec3 v_normal;
+out float v_dist;
+${GLSL_HELPERS}
+${PREVIEW_LIGHT}
+vec4 bg_sampleBlock(vec2 uv) { return textureLod(u_atlas, uv, 0.0); }
+vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(u_atlas, uv, lod); }
+${c.eVert.functions.join('\n')}
+void main() {
+  vec3 wPos = (u_model * vec4(a_pos, 1.0)).xyz;
+  vec3 wNormal = mat3(u_model) * a_normal;
+${indent([entityBuiltins('preview', 'vertex')], '  ')}
+${indent(c.eVert.lines.length ? c.eVert.lines : ['// (no vertex nodes)'], '  ')}
+  vec3 bg_offset = ${c.eVert.outputs.offset || 'vec3(0.0)'};
+  vec3 wp = wPos + bg_offset;
+  v_uv = a_uv;
+  v_lm = a_lm;
+  v_color = a_color;
+  v_world = wp;
+  v_normal = wNormal;
+  v_dist = length(wp - u_cam);
+  gl_Position = u_viewProj * vec4(wp, 1.0);
+}
+`;
+
+  const entityFS = `#version 300 es
+precision highp float;
+precision highp int;
+uniform sampler2D u_atlas;
+uniform float u_far;
+uniform vec4 u_entityColor;
+${PREVIEW_COMMON_UNIFORMS}
+${PREVIEW_ENTITY_UNIFORMS}
+${settingUniforms}
+in vec2 v_uv;
+in vec2 v_lm;
+in vec4 v_color;
+in vec3 v_world;
+in vec3 v_normal;
+in float v_dist;
+out vec4 fragColor;
+${GLSL_HELPERS}
+${GLSL_FRAG_HELPERS}
+${PREVIEW_LIGHT}
+vec4 bg_sampleBlock(vec2 uv) { return texture(u_atlas, uv); }
+vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(u_atlas, uv, lod); }
+${c.eFrag.functions.join('\n')}
+void main() {
+${indent([entityBuiltins('preview', 'fragment')], '  ')}
+${indent(c.eFrag.lines.length ? c.eFrag.lines : ['// (no nodes)'], '  ')}
+${indent(surfaceToColor(eo, c.eFrag.outParams, 'preview', { flash: 'u_entityColor' }), '  ')}
+  fragColor = vec4(rgb, bg_alpha);
+}
+`;
+
+  return { terrainVS, terrainFS, entityVS, entityFS, postFS, settings: c.settings, errors: c.errors };
 }
 
 // ------------------------------------------------------------- node previews
 
 // Tile in the atlas the terrain thumbnails wrap around the preview ball.
-export const PREVIEW_TILE = { origin: [0.25, 0.0], size: 0.25 };
+export const PREVIEW_TILE = { origin: [0.125, 0.0], size: 0.125 }; // tile 1 of the 8×8 preview atlas
 
 export function previewableNode(def) {
   return def && def.outputs.length && !def.isOutput && !def.isNote && !def.setting && !def.noPreview && !['number', 'constant'].includes(def.type);
@@ -377,7 +528,10 @@ float bg_isSky(vec2 uv) { return texture(u_depth, uv).r >= 0.99999 ? 1.0 : 0.0; 
 ${r.functions.join('\n')}
 `;
   let main;
-  if (kind === 'terrain') {
+  if (kind === 'terrain' || kind === 'entity') {
+    const ids = kind === 'entity'
+      ? `\n  int bg_itemId = ${ID_GROUPS.items.swords.id};\n  int bg_entityId = 0;\n  int bg_blockEntityId = 0;\n  float bg_isHeld = 1.0;\n  float bg_isEntity = 0.0;\n  float bg_isBlockEntity = 0.0;`
+      : '';
     main = `void main() {
   vec2 q = v_uv;
   float aspect = u_tileRes.x / u_tileRes.y;
@@ -403,7 +557,7 @@ ${indent(COMMON_TIME(true), '  ')}
   float bg_plantTop = step(0.0, p.y);
   float bg_viewDist = 8.0;
   vec3 bg_viewDir = vec3(0.0, 0.0, 1.0);
-  vec2 bg_faceUV = fract(sph * vec2(4.0, 2.0));
+  vec2 bg_faceUV = fract(sph * vec2(4.0, 2.0));${ids}
 ${indent([body], '  ')}
   vec3 c = clamp(${viz}, 0.0, 1.0);
   fragColor = vec4(c, 1.0);
@@ -498,7 +652,9 @@ uniform float viewWidth;
 uniform float viewHeight;
 uniform float frameTimeCounter;
 uniform int worldTime;
-uniform float rainStrength;`;
+uniform float rainStrength;
+uniform int heldItemId;
+uniform int heldItemId2;`;
 
 function settingsUsedIn(stageResult, all) {
   const m = new Map();
@@ -588,6 +744,93 @@ ${indent([terrainBuiltins('iris', 'fragment')])}
 
 ${indent(c.tFrag.lines.length ? c.tFrag.lines : ['// (no nodes)'])}
 ${indent(surfaceToColor(o, c.tFrag.outParams, 'iris'))}
+	outColor0 = vec4(rgb, bg_alpha);
+}
+`;
+  return { vsh, fsh };
+}
+
+const ENTITY_WHAT = {
+  hand: 'items in your hands, first person',
+  entity: 'mobs, players, worn armour, dropped items, item frames and item displays',
+  block: 'block entities: chests, signs, banners, beds, heads and shulker boxes',
+};
+
+function irisEntity(c, programName, prog) {
+  const vSet = settingsUsedIn(c.eVert, c.settings);
+  const fSet = settingsUsedIn(c.eFrag, c.settings);
+  const o = c.eFrag.outputs;
+  const vsh = `${HEADER(`${programName}.vsh: Items & Entities graph, vertex stage. Draws ${ENTITY_WHAT[prog]}.`)}
+${irisSettingDefines(vSet)}
+
+${IRIS_COMMON_UNIFORMS}
+uniform sampler2D gtexture;
+uniform sampler2D lightmap;
+uniform int entityId;
+uniform int blockEntityId;
+uniform int currentRenderedItemId;
+
+out vec2 texcoord;
+out vec2 lmcoord;
+out vec4 glcolor;
+out vec3 worldPos;
+out vec3 worldNormal;
+out float viewDist;
+${GLSL_HELPERS}
+vec4 bg_sampleBlock(vec2 uv) { return textureLod(gtexture, uv, 0.0); }
+vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(gtexture, uv, lod); }
+${c.eVert.functions.join('\n')}
+void main() {
+	texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+	lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
+	glcolor = gl_Color;
+
+	vec4 playerPos = gbufferModelViewInverse * (gl_ModelViewMatrix * gl_Vertex);
+	vec3 wPos = playerPos.xyz + cameraPosition;
+	vec3 wNormal = bg_safeNormalize(mat3(gbufferModelViewInverse) * (gl_NormalMatrix * gl_Normal));
+
+${indent([entityBuiltins('iris', 'vertex', prog)])}
+
+${indent(c.eVert.lines.length ? c.eVert.lines : ['// (nothing is wired into Vertex Offset)'])}
+	vec3 bg_offset = ${c.eVert.outputs.offset || 'vec3(0.0)'};
+
+	playerPos.xyz += bg_offset;
+	worldPos = wPos + bg_offset;
+	worldNormal = wNormal;
+	viewDist = length(playerPos.xyz);
+	gl_Position = gl_ProjectionMatrix * (gbufferModelView * playerPos);
+}
+`;
+  const fsh = `${HEADER(`${programName}.fsh: Items & Entities graph, pixel stage. Draws ${ENTITY_WHAT[prog]}.`)}
+${irisSettingDefines(fSet)}
+
+${IRIS_COMMON_UNIFORMS}
+uniform sampler2D gtexture;
+uniform sampler2D lightmap;
+uniform vec4 entityColor;
+uniform int entityId;
+uniform int blockEntityId;
+uniform int currentRenderedItemId;
+
+in vec2 texcoord;
+in vec2 lmcoord;
+in vec4 glcolor;
+in vec3 worldPos;
+in vec3 worldNormal;
+in float viewDist;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 outColor0;
+${GLSL_HELPERS}
+${GLSL_FRAG_HELPERS}
+vec4 bg_sampleBlock(vec2 uv) { return texture(gtexture, uv); }
+vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(gtexture, uv, lod); }
+${c.eFrag.functions.join('\n')}
+void main() {
+${indent([entityBuiltins('iris', 'fragment', prog)])}
+
+${indent(c.eFrag.lines.length ? c.eFrag.lines : ['// (no nodes)'])}
+${indent(surfaceToColor(o, c.eFrag.outParams, 'iris', { flash: 'entityColor' }))}
 	outColor0 = vec4(rgb, bg_alpha);
 }
 `;
@@ -721,6 +964,30 @@ void main() {
 	if (color.a < alphaTestRef) discard;
 }
 `,
+  'gbuffers_armor_glint.vsh': `${HEADER('gbuffers_armor_glint.vsh: enchantment glint on items and armour. Kept separate so the Items & Entities graph never touches it.')}
+out vec2 texcoord;
+out vec4 glcolor;
+
+void main() {
+	gl_Position = ftransform();
+	texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+	glcolor = gl_Color;
+}
+`,
+  'gbuffers_armor_glint.fsh': `${HEADER('gbuffers_armor_glint.fsh: the scrolling glint texture, blended by Minecraft as usual')}
+uniform sampler2D gtexture;
+
+in vec2 texcoord;
+in vec4 glcolor;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 color;
+
+void main() {
+	color = texture(gtexture, texcoord) * glcolor;
+	if (color.a < 0.1) discard;
+}
+`,
   'gbuffers_skybasic.vsh': `${HEADER('gbuffers_skybasic.vsh: sky colour and stars')}
 out vec4 starData;
 
@@ -812,6 +1079,15 @@ export function buildIris(graphs, opts = {}) {
   files['shaders/gbuffers_water.fsh'] = water.fsh;
   files['shaders/composite.vsh'] = comp.vsh;
   files['shaders/composite.fsh'] = comp.fsh;
+  for (const [name, prog] of [
+    ['gbuffers_hand', 'hand'], ['gbuffers_hand_water', 'hand'],
+    ['gbuffers_entities', 'entity'], ['gbuffers_entities_translucent', 'entity'],
+    ['gbuffers_block', 'block'], ['gbuffers_block_translucent', 'block'],
+  ]) {
+    const e = irisEntity(c, name, prog);
+    files[`shaders/${name}.vsh`] = e.vsh;
+    files[`shaders/${name}.fsh`] = e.fsh;
+  }
   for (const [name, src] of Object.entries(STATIC_PROGRAMS)) files['shaders/' + name] = src;
 
   files['shaders/block.properties'] = [
@@ -819,6 +1095,25 @@ export function buildIris(graphs, opts = {}) {
     `block.${BLOCK_IDS.leaves}=${LEAVES.join(' ')}`,
     `block.${BLOCK_IDS.plants}=${PLANTS.join(' ')}`,
     `block.${BLOCK_IDS.water}=water`,
+    '',
+    '# Block entities, read through blockEntityId by the Block Entity Mask node.',
+    ...Object.values(ID_GROUPS.blockEntities).map((g) => `block.${g.id}=${g.names.join(' ')}`),
+    '',
+    '# Common building blocks. As items they count as "Blocks as items" (currentRenderedItemId).',
+    `block.${ID_GROUPS.buildingBlocks.id}=${ID_GROUPS.buildingBlocks.names.join(' ')}`,
+    '',
+  ].join('\n');
+
+  files['shaders/item.properties'] = [
+    '# Item groups for the Item ID Mask and Held Item Mask nodes',
+    '# (currentRenderedItemId, heldItemId, heldItemId2).',
+    ...Object.values(ID_GROUPS.items).map((g) => `item.${g.id}=${g.names.join(' ')}`),
+    '',
+  ].join('\n');
+
+  files['shaders/entity.properties'] = [
+    '# Entity groups for the Entity Type Mask node (entityId).',
+    ...Object.values(ID_GROUPS.entities).map((g) => `entity.${g.id}=${g.names.join(' ')}`),
     '',
   ].join('\n');
 

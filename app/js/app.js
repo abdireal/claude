@@ -3,7 +3,7 @@
 
 import { NODE_DEFS, CATEGORIES, BINDS, rgbToHex, hexToLinear, normStops, allowedIn } from './nodes.js';
 import { defaultParams, collectSettings, inferTypes } from './codegen.js';
-import { buildPreview, buildIris, sliderValues, buildNodePreview, previewableNode, PREVIEW_TILE, choiceOptions, choiceIndex } from './targets.js';
+import { buildPreview, buildIris, sliderValues, buildNodePreview, previewableNode, PREVIEW_TILE, choiceOptions, choiceIndex, defaultEntityGraph } from './targets.js';
 import { GraphEditor } from './editor.js';
 import { Preview } from './preview.js';
 import { PRESETS } from './presets.js';
@@ -35,6 +35,10 @@ const GRAPH_INFO = {
     name: 'Blocks',
     caption: 'Runs on every block, for every pixel. Exports to gbuffers_terrain and gbuffers_water.',
   },
+  entity: {
+    name: 'Items & Entities',
+    caption: 'Runs on held items, dropped items, mobs, players and block entities like chests and signs. Exports to gbuffers_hand, gbuffers_entities and gbuffers_block.',
+  },
   post: {
     name: 'Post FX',
     caption: 'Runs once on the finished screen image. Exports to composite.',
@@ -50,7 +54,7 @@ const GRAPH_INFO = {
 const state = {
   graphs: null,
   kind: 'terrain',
-  views: { terrain: null, post: null },
+  views: { terrain: null, entity: null, post: null },
   packName: 'My BlockGraph Pack',
   presetId: 'waving',
   textures: [],
@@ -95,7 +99,7 @@ function pushHistory() {
 
 function restore(s) {
   const data = JSON.parse(s);
-  state.graphs = data.graphs;
+  state.graphs = withEntityGraph(data.graphs);
   state.packName = data.packName || state.packName;
   state.textures = data.textures || [];
   state.texSel = data.texSel || null;
@@ -148,8 +152,17 @@ function save() {
   }, 400);
 }
 
+const graphOk = (g) => g && Array.isArray(g.nodes) && Array.isArray(g.links) && g.nodes.some((n) => NODE_DEFS[n.type]?.isOutput);
+
 function validGraphs(g) {
-  return g && ['terrain', 'post'].every((k) => g[k] && Array.isArray(g[k].nodes) && Array.isArray(g[k].links) && g[k].nodes.some((n) => NODE_DEFS[n.type]?.isOutput));
+  return g && ['terrain', 'post'].every((k) => graphOk(g[k]));
+}
+
+// Files and autosaves from before the Items & Entities graph have no entity
+// graph. They get the default one, which looks like vanilla.
+function withEntityGraph(g) {
+  if (!graphOk(g.entity)) g.entity = { ...defaultEntityGraph(), needsLayout: true };
+  return g;
 }
 
 function loadInitial() {
@@ -158,9 +171,9 @@ function loadInitial() {
     try {
       const d = JSON.parse(raw);
       if (validGraphs(d.graphs)) {
-        state.graphs = d.graphs;
+        state.graphs = withEntityGraph(d.graphs);
         state.packName = d.packName || state.packName;
-        state.kind = ['post', 'texture'].includes(d.kind) ? d.kind : 'terrain';
+        state.kind = ['entity', 'post', 'texture'].includes(d.kind) ? d.kind : 'terrain';
         state.presetId = d.presetId || null;
         state.textures = Array.isArray(d.textures) ? d.textures : [];
         state.texSel = d.texSel || null;
@@ -169,9 +182,8 @@ function loadInitial() {
       }
     } catch { /* fall through to the default preset */ }
   }
-  state.graphs = PRESETS[0].build();
-  state.graphs.terrain.needsLayout = true;
-  state.graphs.post.needsLayout = true;
+  state.graphs = withEntityGraph(PRESETS[0].build());
+  for (const g of Object.values(state.graphs)) g.needsLayout = true;
 }
 
 // ------------------------------------------------------------- compile
@@ -789,7 +801,7 @@ function renderNodeInspector(box, node) {
         ta.addEventListener('change', () => { node.params[p.id] = ta.value; commit(); });
         const outT = P.outType || 'vec3';
         sec.append(field(p.name, ta, `Becomes: ${outT} bg_custom_${node.id}(vec4 a, vec4 b, vec4 c, vec4 d, float time) { … }`), apply);
-        const log = previewErrors.get(node.id) || (glErrors && [glErrors.terrainError, glErrors.postError].filter(Boolean).join('\n'));
+        const log = previewErrors.get(node.id) || (glErrors && [glErrors.terrainError, glErrors.entityError, glErrors.postError].filter(Boolean).join('\n'));
         if (log) {
           const lines = log.split('\n').filter((l) => /ERROR/i.test(l)).slice(0, 4);
           if (lines.length) box.append(el('pre', 'insp-error mono', lines.join('\n')));
@@ -1012,7 +1024,7 @@ function renderStatus() {
   chip.className = 'status-chip ' + (errs ? 'bad' : 'good');
   chip.textContent = errs ? `${errs} problem${errs > 1 ? 's' : ''}` : 'Compiled';
   if (glErrors) {
-    const msg = (glErrors.terrainError || glErrors.postError || '').split('\n').find((l) => l.trim()) || 'Shader error';
+    const msg = (glErrors.terrainError || glErrors.entityError || glErrors.postError || '').split('\n').find((l) => l.trim()) || 'Shader error';
     s.textContent = `Preview compile error: ${msg}`;
   } else if (lastErrors.length) {
     s.textContent = lastErrors[0].msg;
@@ -1020,7 +1032,7 @@ function renderStatus() {
     s.textContent = 'Preview is live. Export when it looks right.';
   }
   const { settings } = collectSettings(state.graphs);
-  $('#status-counts').textContent = `Blocks ${state.graphs.terrain.nodes.length} nodes · Post FX ${state.graphs.post.nodes.length} nodes · ${state.textures.length} texture${state.textures.length === 1 ? '' : 's'} · ${settings.size} setting${settings.size === 1 ? '' : 's'}`;
+  $('#status-counts').textContent = `Blocks ${state.graphs.terrain.nodes.length} · Items ${state.graphs.entity.nodes.length} · Post FX ${state.graphs.post.nodes.length} nodes · ${state.textures.length} texture${state.textures.length === 1 ? '' : 's'} · ${settings.size} setting${settings.size === 1 ? '' : 's'}`;
 }
 
 function refreshAll() {
@@ -1085,7 +1097,7 @@ async function copyText(text, btn) {
 function openCode() {
   const { files, errors } = buildIris(state.graphs, { name: state.packName });
   const wrap = el('div', 'code-view');
-  const order = ['shaders/gbuffers_terrain.fsh', 'shaders/gbuffers_terrain.vsh', 'shaders/composite.fsh', 'shaders/shaders.properties', 'shaders/block.properties', 'shaders/lang/en_us.lang'];
+  const order = ['shaders/gbuffers_terrain.fsh', 'shaders/gbuffers_terrain.vsh', 'shaders/gbuffers_entities.fsh', 'shaders/gbuffers_entities.vsh', 'shaders/gbuffers_hand.fsh', 'shaders/composite.fsh', 'shaders/shaders.properties', 'shaders/block.properties', 'shaders/item.properties', 'shaders/entity.properties', 'shaders/lang/en_us.lang'];
   const names = [...order, ...Object.keys(files).filter((f) => !order.includes(f))];
   const tabs = el('div', 'code-tabs');
   tabs.setAttribute('role', 'tablist');
@@ -1187,7 +1199,7 @@ function openExport() {
   const fileCount = Object.keys(files).length;
   const stats = [
     [String(fileCount), 'files in the pack'],
-    [String(state.graphs.terrain.nodes.length + state.graphs.post.nodes.length), 'nodes compiled'],
+    [String(state.graphs.terrain.nodes.length + state.graphs.entity.nodes.length + state.graphs.post.nodes.length), 'nodes compiled'],
     [String(settings.size), `in-game setting${settings.size === 1 ? '' : 's'}`],
   ];
   for (const [n, l] of stats) {
@@ -1305,11 +1317,10 @@ function renderPresetMenu() {
 }
 
 function applyPreset(p) {
-  state.graphs = p.build();
-  state.graphs.terrain.needsLayout = true;
-  state.graphs.post.needsLayout = true;
+  state.graphs = withEntityGraph(p.build());
+  for (const g of Object.values(state.graphs)) g.needsLayout = true;
   state.presetId = p.id;
-  state.views = { ...state.views, terrain: null, post: null };
+  state.views = { ...state.views, terrain: null, entity: null, post: null };
   if (state.kind === 'texture') switchGraph('terrain');
   editor.load(currentGraph(), null);
   requestAnimationFrame(() => editor.frameAll(true));
@@ -1423,12 +1434,12 @@ function bindUI() {
     try {
       const d = JSON.parse(await f.text());
       if (!validGraphs(d.graphs)) throw new Error('not a BlockGraph file');
-      state.graphs = d.graphs;
+      state.graphs = withEntityGraph(d.graphs);
       state.packName = d.packName || state.packName;
       state.textures = Array.isArray(d.textures) ? d.textures : [];
       state.texNext = Math.max(d.texNext || 1, state.textures.length + 1);
       state.texSel = state.textures[0]?.id || null;
-      state.views = { terrain: null, post: null };
+      state.views = { terrain: null, entity: null, post: null };
       TX.syncRegistry();
       TX.loadAll();
       editor.load(currentGraph(), null);

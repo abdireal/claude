@@ -4,6 +4,27 @@
 // ------------------------------------------------------------------ math
 
 const m4 = {
+  translate(x, y, z) {
+    return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1]);
+  },
+  scale(k) {
+    return new Float32Array([k, 0, 0, 0, 0, k, 0, 0, 0, 0, k, 0, 0, 0, 0, 1]);
+  },
+  rotX(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return new Float32Array([1, 0, 0, 0, 0, c, s, 0, 0, -s, c, 0, 0, 0, 0, 1]);
+  },
+  rotY(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return new Float32Array([c, 0, -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1]);
+  },
+  rotZ(a) {
+    const c = Math.cos(a), s = Math.sin(a);
+    return new Float32Array([c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  },
+  chain(...ms) {
+    return ms.reduce((a, b) => m4.mul(a, b));
+  },
   perspective(fovy, aspect, near, far) {
     const f = 1 / Math.tan(fovy / 2);
     const m = new Float32Array(16);
@@ -71,8 +92,12 @@ function rng(seed) {
   };
 }
 
-const TILE = { grassTop: 0, grassSide: 1, dirt: 2, stone: 3, logSide: 4, logTop: 5, leaves: 6, shortGrass: 7, poppy: 8, water: 9, sand: 10, glowstone: 11, diamond: 12 };
-const ATLAS_TILES = 4;
+const TILE = {
+  grassTop: 0, grassSide: 1, dirt: 2, stone: 3, logSide: 4, logTop: 5, leaves: 6, shortGrass: 7, poppy: 8, water: 9, sand: 10,
+  glowstone: 11, diamond: 12, sword: 13, shield: 14, chestSide: 15, chestFront: 16, chestTop: 17,
+  zSkin: 18, zFace: 19, zShirt: 20, zPants: 21,
+};
+const ATLAS_TILES = 8;
 const TILE_PX = 64;
 
 // Which preview tile a resource-pack texture path replaces.
@@ -201,6 +226,49 @@ function buildAtlas() {
       if (r() < 0.85) put(TILE.diamond, cx + dx, cy + dy, pick(r, ['#5decf5', '#2bc4cf', '#a8f7fb', '#1a8e96']));
     }
   }
+  // --- items and entities for the Items & Entities preview ---
+  for (const tile of [TILE.sword]) for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) put(tile, x, y, [0, 0, 0], 0);
+  for (let i = 0; i <= 8; i++) {
+    put(TILE.sword, 5 + i, 10 - i, hex('#eef1f3'));
+    put(TILE.sword, 6 + i, 10 - i, hex('#b9c0c6'));
+    put(TILE.sword, 5 + i, 11 - i, hex('#59616a'));
+  }
+  put(TILE.sword, 14, 1, hex('#eef1f3'));
+  for (const [x, y] of [[3, 9], [4, 10], [5, 11], [6, 12], [2, 8], [7, 13]]) put(TILE.sword, x, y, hex('#3d3f44'));
+  for (const [x, y] of [[4, 11], [3, 12], [2, 13]]) put(TILE.sword, x, y, hex('#6b4a2a'));
+  for (const [x, y] of [[1, 14], [2, 14], [1, 13]]) put(TILE.sword, x, y, hex('#3d3f44'));
+
+  r = rng(31);
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+    const rim = x === 0 || y === 0 || x === 15 || y === 15;
+    const boss = x >= 6 && x <= 9 && y >= 6 && y <= 9;
+    const plank = x % 4 === 0 ? 0.8 : 1;
+    const c = rim || boss ? pick(r, ['#9aa1a8', '#c3c9ce', '#7c838a']) : pick(r, ['#8b6234', '#7a552c', '#946a3a']).map((v) => v * plank);
+    put(TILE.shield, x, y, c);
+  }
+
+  const chestWood = ['#a46e2c', '#93622a', '#b07935', '#8a5a24'];
+  for (const tile of [TILE.chestSide, TILE.chestFront, TILE.chestTop]) {
+    r = rng(40 + tile);
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      const border = x === 0 || x === 15 || y === 0 || y === 15;
+      const seam = tile !== TILE.chestTop && (y === 5 || y === 6);
+      put(tile, x, y, border || seam ? hex('#4a2c10') : pick(r, chestWood));
+    }
+  }
+  for (let y = 4; y <= 8; y++) for (let x = 7; x <= 8; x++) put(TILE.chestFront, x, y, y === 4 || y === 8 ? hex('#3a3a3a') : hex('#cfd3d6'));
+
+  r = rng(51);
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) put(TILE.zSkin, x, y, pick(r, ['#5b8d3e', '#4f7f35', '#66994a']));
+  r = rng(52);
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) put(TILE.zFace, x, y, pick(r, ['#5b8d3e', '#4f7f35', '#66994a']));
+  for (const [x, y] of [[3, 7], [4, 7], [3, 8], [4, 8], [11, 7], [12, 7], [11, 8], [12, 8]]) put(TILE.zFace, x, y, hex('#13200c'));
+  for (let x = 6; x <= 9; x++) put(TILE.zFace, x, 11, hex('#2f4a22'));
+  r = rng(53);
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) put(TILE.zShirt, x, y, pick(r, ['#2f8f93', '#2a8084', '#36a0a4']));
+  r = rng(54);
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) put(TILE.zPants, x, y, pick(r, ['#3b3f99', '#34388a', '#4347a8']));
+
   return { data, size };
 }
 
@@ -343,6 +411,66 @@ function buildScene() {
 }
 
 // --------------------------------------------------------------- shaders
+
+// --------------------------------------------------------------- entities
+// Box models for the Items & Entities preview: a chest (block entity), a
+// zombie (hostile mob), and a sword and shield held in first person. They use
+// the same vertex layout as blocks.
+
+function buildEntityMeshes() {
+  const tileUV = (t) => [(t % ATLAS_TILES) / ATLAS_TILES, Math.floor(t / ATLAS_TILES) / ATLAS_TILES];
+  const eps = 0.0008;
+  const S = 1 / ATLAS_TILES;
+  function quad(arr, corners, n, tile, shade, lm, flip = false) {
+    const [u0, v0] = tileUV(tile);
+    const uvs = flip ? [[1, 0], [1, 1], [0, 1], [0, 0]] : [[0, 0], [0, 1], [1, 1], [1, 0]];
+    for (const i of [0, 1, 2, 0, 2, 3]) {
+      const p = corners[i];
+      arr.push(p[0], p[1], p[2], n[0], n[1], n[2],
+        u0 + eps + uvs[i][0] * (S - 2 * eps), v0 + eps + uvs[i][1] * (S - 2 * eps),
+        shade, shade, shade, 1, lm[0], lm[1], 0, 0);
+    }
+  }
+  // tiles: { top, bottom, side, front } ; front faces +z
+  function box(arr, a, b, tiles, lm) {
+    const [x0, y0, z0] = a, [x1, y1, z1] = b;
+    const t = (k) => tiles[k] ?? tiles.side;
+    quad(arr, [[x0, y1, z1], [x1, y1, z1], [x1, y1, z0], [x0, y1, z0]], [0, 1, 0], t('top'), 1.0, lm);
+    quad(arr, [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]], [0, -1, 0], t('bottom'), 0.5, lm);
+    quad(arr, [[x0, y1, z1], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1]], [0, 0, 1], t('front'), 0.8, lm);
+    quad(arr, [[x1, y1, z0], [x1, y0, z0], [x0, y0, z0], [x0, y1, z0]], [0, 0, -1], t('back'), 0.8, lm);
+    quad(arr, [[x1, y1, z1], [x1, y0, z1], [x1, y0, z0], [x1, y1, z0]], [1, 0, 0], t('side'), 0.6, lm);
+    quad(arr, [[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]], [-1, 0, 0], t('side'), 0.6, lm);
+  }
+  const px = (v) => v / 16;
+
+  const chest = [];
+  box(chest, [px(1), 0, px(1)], [px(15), px(14), px(15)], { top: TILE.chestTop, bottom: TILE.chestTop, side: TILE.chestSide, back: TILE.chestSide, front: TILE.chestFront }, [0.8, 1]);
+
+  const zombie = [];
+  const lm = [0, 1];
+  box(zombie, [px(-4), 0, px(-2)], [0, px(12), px(2)], { side: TILE.zPants }, lm);
+  box(zombie, [0, 0, px(-2)], [px(4), px(12), px(2)], { side: TILE.zPants }, lm);
+  box(zombie, [px(-4), px(12), px(-2)], [px(4), px(24), px(2)], { side: TILE.zShirt }, lm);
+  box(zombie, [px(-8), px(20), px(-2)], [px(-4), px(24), px(10)], { side: TILE.zSkin }, lm);
+  box(zombie, [px(4), px(20), px(-2)], [px(8), px(24), px(10)], { side: TILE.zSkin }, lm);
+  box(zombie, [px(-4), px(24), px(-4)], [px(4), px(32), px(4)], { side: TILE.zSkin, front: TILE.zFace }, lm);
+
+  // A flat item sprite with a front and a back, like Minecraft's item models.
+  const sword = [];
+  quad(sword, [[-0.5, 0.5, 0.02], [-0.5, -0.5, 0.02], [0.5, -0.5, 0.02], [0.5, 0.5, 0.02]], [0, 0, 1], TILE.sword, 1.0, [0, 1]);
+  quad(sword, [[0.5, 0.5, -0.02], [0.5, -0.5, -0.02], [-0.5, -0.5, -0.02], [-0.5, 0.5, -0.02]], [0, 0, -1], TILE.sword, 0.75, [0, 1], true);
+
+  const shield = [];
+  box(shield, [px(-6), px(-11), px(-0.6)], [px(6), px(11), px(0.6)], { side: TILE.shield, front: TILE.shield, back: TILE.chestSide }, [0, 1]);
+
+  return {
+    chest: new Float32Array(chest),
+    zombie: new Float32Array(zombie),
+    sword: new Float32Array(sword),
+    shield: new Float32Array(shield),
+  };
+}
 
 const FULLSCREEN_VS = `#version 300 es
 out vec2 v_uv;
@@ -487,6 +615,13 @@ export class Preview {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
     const scene = buildScene();
+    const em = buildEntityMeshes();
+    this.entityMeshes = {
+      chest: this.makeMesh(em.chest),
+      zombie: this.makeMesh(em.zombie),
+      sword: this.makeMesh(em.sword),
+      shield: this.makeMesh(em.shield),
+    };
     this.meshes = {
       opaque: this.makeMesh(scene.opaque),
       water: this.makeMesh(scene.water),
@@ -518,10 +653,20 @@ export class Preview {
   }
 
   // Compiles new graph shaders. Keeps the last working ones if this fails.
-  setShaders({ terrainVS, terrainFS, postFS }) {
+  setShaders({ terrainVS, terrainFS, postFS, entityVS, entityFS }) {
     if (!this.ok) return { ok: false, error: this.error };
     const gl = this.gl;
     const result = { ok: true };
+    if (entityVS) {
+      try {
+        const e = link(gl, entityVS, entityFS, ATTRIBS);
+        if (this.entity) gl.deleteProgram(this.entity.p);
+        this.entity = e;
+      } catch (err) {
+        result.ok = false;
+        result.entityError = String(err.message || err);
+      }
+    }
     try {
       const t = link(gl, terrainVS, terrainFS, ATTRIBS);
       if (this.terrain) gl.deleteProgram(this.terrain.p);
@@ -680,6 +825,9 @@ export class Preview {
     gl.bindVertexArray(this.meshes.opaque.vao);
     gl.drawArrays(gl.TRIANGLES, 0, this.meshes.opaque.count);
 
+    // block entities and mobs (Items & Entities graph)
+    if (this.entity) this.drawEntities(viewProj, f, false, view);
+
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
     gl.depthMask(false);
@@ -687,6 +835,13 @@ export class Preview {
     gl.drawArrays(gl.TRIANGLES, 0, this.meshes.water.count);
     gl.disable(gl.BLEND);
     gl.depthMask(true);
+
+    // first-person items, squeezed into the front of the depth range like Minecraft's hand
+    if (this.entity) {
+      gl.depthRange(0, 0.05);
+      this.drawEntities(viewProj, f, true, view);
+      gl.depthRange(0, 1);
+    }
 
     // post
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -959,6 +1114,53 @@ export class Preview {
     return { img };
   }
 
+  // Draws the chest and zombie (world) or the held sword and shield (hand).
+  drawEntities(viewProj, f, hand, view) {
+    const gl = this.gl;
+    const ep = this.entity;
+    const u = ep.u;
+    gl.useProgram(ep.p);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, this.atlas);
+    if (u.u_atlas) gl.uniform1i(u.u_atlas, 0);
+    if (u.u_viewProj) gl.uniformMatrix4fv(u.u_viewProj, false, viewProj);
+    if (u.u_far) gl.uniform1f(u.u_far, 28);
+    this.setCommon(u, f);
+    const set = (o) => {
+      if (u.u_model) gl.uniformMatrix4fv(u.u_model, false, o.model);
+      if (u.u_itemId) gl.uniform1i(u.u_itemId, o.itemId || -1);
+      if (u.u_entityId) gl.uniform1i(u.u_entityId, o.entityId || -1);
+      if (u.u_blockEntityId) gl.uniform1i(u.u_blockEntityId, o.blockEntityId || -1);
+      if (u.u_isHeld) gl.uniform1f(u.u_isHeld, o.held ? 1 : 0);
+      if (u.u_isEntity) gl.uniform1f(u.u_isEntity, o.isEntity ? 1 : 0);
+      if (u.u_isBlockEntity) gl.uniform1f(u.u_isBlockEntity, o.isBlock ? 1 : 0);
+      if (u.u_entityColor) gl.uniform4fv(u.u_entityColor, o.flash || [0, 0, 0, 0]);
+      gl.bindVertexArray(o.mesh.vao);
+      gl.drawArrays(gl.TRIANGLES, 0, o.mesh.count);
+    };
+    const t = f.time;
+    if (!hand) {
+      set({ mesh: this.entityMeshes.chest, model: m4.translate(0, 1, -3), isBlock: true, blockEntityId: 10101 });
+      const hurt = t % 4 < 0.3;
+      set({
+        mesh: this.entityMeshes.zombie, isEntity: true, entityId: 30002,
+        model: m4.chain(m4.translate(1.5, 1, 2.5), m4.rotY(0.6 + Math.sin(t * 0.7) * 0.15)),
+        flash: hurt ? [1, 0, 0, 0.5] : [0, 0, 0, 0],
+      });
+      return;
+    }
+    const camToWorld = m4.invert(view);
+    const bob = Math.sin(t * 1.6) * 0.012;
+    set({
+      mesh: this.entityMeshes.sword, held: true, itemId: 20001,
+      model: m4.chain(camToWorld, m4.translate(0.5, -0.33 + bob, -1.4), m4.rotY(-0.5), m4.rotZ(0.08), m4.scale(0.56)),
+    });
+    set({
+      mesh: this.entityMeshes.shield, held: true, itemId: 20003,
+      model: m4.chain(camToWorld, m4.translate(-0.6, -0.4 - bob, -1.4), m4.rotY(0.4), m4.rotX(-0.06), m4.scale(0.46)),
+    });
+  }
+
   // Uniforms every generated shader can read (the bg_* builtins).
   setCommon(u, f = this.lastFrame || this.defaultFrame()) {
     const gl = this.gl;
@@ -972,6 +1174,9 @@ export class Preview {
     if (u.u_time) gl.uniform1f(u.u_time, f.time);
     if (u.u_dayTime) gl.uniform1f(u.u_dayTime, this.dayTime);
     if (u.u_rain) gl.uniform1f(u.u_rain, this.rain);
+    // The preview player holds a sword (main hand) and a shield (off hand).
+    if (u.u_heldItem) gl.uniform1i(u.u_heldItem, 20001);
+    if (u.u_heldItem2) gl.uniform1i(u.u_heldItem2, 20003);
     if (u.u_projInv) gl.uniformMatrix4fv(u.u_projInv, false, f.projInv);
     this.applySettings(u);
   }

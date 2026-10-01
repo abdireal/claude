@@ -36,8 +36,8 @@ function def(d) {
 // ---------------------------------------------------------------- World inputs
 
 def({
-  type: 'blockTexture', title: 'Block Texture', cat: 'Input', graphs: ['terrain'], fragOnly: true,
-  desc: "The block's own texture from the resource pack, sampled at the UV you give it.",
+  type: 'blockTexture', title: 'Block Texture', cat: 'Input', graphs: ['terrain', 'entity'], fragOnly: true,
+  desc: "The texture being drawn, sampled at the UV you give it: the block's texture in the Blocks graph, the item or mob texture in the Items & Entities graph.",
   keywords: 'albedo sample texture atlas gtexture',
   inputs: [{ id: 'uv', name: 'UV', type: 'vec2', bind: 'uv' }],
   outputs: [
@@ -52,7 +52,7 @@ def({
 });
 
 def({
-  type: 'uv', title: 'Texture UV', cat: 'Input', graphs: ['terrain'],
+  type: 'uv', title: 'Texture UV', cat: 'Input', graphs: ['terrain', 'entity'],
   desc: 'Where this pixel sits on the block texture atlas.',
   keywords: 'texcoord coordinates',
   outputs: [{ id: 'uv', name: 'UV', type: 'vec2' }],
@@ -84,7 +84,7 @@ def({
 });
 
 def({
-  type: 'worldPos', title: 'World Position', cat: 'Input', graphs: ['terrain'],
+  type: 'worldPos', title: 'World Position', cat: 'Input', graphs: ['terrain', 'entity'],
   desc: 'The block-space position of this point in the world. 1 unit = 1 block.',
   keywords: 'position coordinates xyz',
   outputs: [
@@ -96,7 +96,7 @@ def({
 });
 
 def({
-  type: 'normal', title: 'Normal', cat: 'Input', graphs: ['terrain'],
+  type: 'normal', title: 'Normal', cat: 'Input', graphs: ['terrain', 'entity'],
   desc: 'The direction this face points. Up Facing is 1 on top faces and 0 on walls.',
   keywords: 'direction face up',
   outputs: [
@@ -107,7 +107,7 @@ def({
 });
 
 def({
-  type: 'vertexColor', title: 'Biome Tint', cat: 'Input', graphs: ['terrain'],
+  type: 'vertexColor', title: 'Biome Tint', cat: 'Input', graphs: ['terrain', 'entity'],
   desc: 'The vertex colour Minecraft sends: biome tint for grass, leaves and water, plus vanilla face shading and ambient occlusion.',
   keywords: 'vertex color glcolor biome tint ao',
   outputs: [
@@ -118,7 +118,7 @@ def({
 });
 
 def({
-  type: 'light', title: 'Light', cat: 'Input', graphs: ['terrain'],
+  type: 'light', title: 'Light', cat: 'Input', graphs: ['terrain', 'entity'],
   desc: 'Vanilla lighting at this spot: the lightmap colour, plus block light (torches) and sky light as 0–1 values.',
   keywords: 'lightmap torch sky lmcoord brightness',
   outputs: [
@@ -150,7 +150,7 @@ def({
 });
 
 def({
-  type: 'camDistance', title: 'Camera Distance', cat: 'Input', graphs: ['terrain'],
+  type: 'camDistance', title: 'Camera Distance', cat: 'Input', graphs: ['terrain', 'entity'],
   desc: 'How far this point is from the player, in blocks.',
   keywords: 'distance depth far near',
   outputs: [{ id: 'd', name: 'Blocks', type: 'float' }],
@@ -158,7 +158,7 @@ def({
 });
 
 def({
-  type: 'fresnel', title: 'Fresnel', cat: 'Input', graphs: ['terrain'],
+  type: 'fresnel', title: 'Fresnel', cat: 'Input', graphs: ['terrain', 'entity'],
   desc: 'Bright at grazing angles, dark when you look straight at a face. Good for rim glow and water edges.',
   keywords: 'rim edge glow view angle',
   inputs: [{ id: 'p', name: 'Power', type: 'float', def: 3 }],
@@ -619,7 +619,7 @@ def({
 });
 
 def({
-  type: 'wind', title: 'Wind Sway', cat: 'Pattern', graphs: ['terrain'], width: 180,
+  type: 'wind', title: 'Wind Sway', cat: 'Pattern', graphs: ['terrain', 'entity'], width: 180,
   desc: 'A ready-made gentle wind offset. Plug it into Vertex Offset and mask it with Block Type → Wave Mask.',
   keywords: 'waving leaves plants grass foliage wind sway vertex',
   inputs: [
@@ -777,7 +777,7 @@ const lit3 = (v) => `vec3(${v.map((x) => (Number.isInteger(x) ? x.toFixed(1) : S
 // ------------------------------------------------------------ More inputs
 
 def({
-  type: 'faceUV', title: 'Face UV', cat: 'Input', graphs: ['terrain'],
+  type: 'faceUV', title: 'Face UV', cat: 'Input', graphs: ['terrain', 'entity'],
   desc: 'Runs 0 to 1 across every block face, worked out from the world position. Use it for per-block shapes, borders and patterns.',
   keywords: 'local uv block face tile per block square',
   outputs: [{ id: 'uv', name: 'UV', type: 'vec2' }],
@@ -785,7 +785,7 @@ def({
 });
 
 def({
-  type: 'viewDir', title: 'View Direction', cat: 'Input', graphs: ['terrain'],
+  type: 'viewDir', title: 'View Direction', cat: 'Input', graphs: ['terrain', 'entity'],
   desc: 'The direction from this point towards the camera.',
   keywords: 'eye camera vector view',
   outputs: [{ id: 'v', name: 'Direction', type: 'vec3' }],
@@ -793,7 +793,7 @@ def({
 });
 
 def({
-  type: 'screenPos', title: 'Screen Position', cat: 'Input', graphs: ['terrain'], fragOnly: true,
+  type: 'screenPos', title: 'Screen Position', cat: 'Input', graphs: ['terrain', 'entity'], fragOnly: true,
   desc: 'Where this pixel lands on screen, from 0 to 1. Pixels gives the raw pixel coordinate.',
   keywords: 'screen space position pixel fragcoord',
   outputs: [
@@ -804,7 +804,7 @@ def({
 });
 
 def({
-  type: 'frontFace', title: 'Is Front Face', cat: 'Input', graphs: ['terrain'], fragOnly: true,
+  type: 'frontFace', title: 'Is Front Face', cat: 'Input', graphs: ['terrain', 'entity'], fragOnly: true,
   desc: '1 on the side of a face that points at you, 0 on its back. Handy for two-sided plants and glass.',
   keywords: 'backface side two sided gl_FrontFacing',
   outputs: [{ id: 'out', name: 'Front', type: 'float' }],
@@ -835,7 +835,7 @@ def({
 });
 
 def({
-  type: 'blockTextureLod', title: 'Block Texture LOD', cat: 'Input', graphs: ['terrain'],
+  type: 'blockTextureLod', title: 'Block Texture LOD', cat: 'Input', graphs: ['terrain', 'entity'],
   desc: 'Samples the block texture at a chosen mip level, like Sample Texture 2D LOD. Higher levels are blurrier. Also works in Vertex Offset.',
   keywords: 'mip level lod sample texture blur',
   inputs: [
@@ -1336,7 +1336,7 @@ function fnum(n) {
 // ------------------------------------------------------------------ Normal
 
 def({
-  type: 'normalFromHeight', title: 'Normal From Height', cat: 'Normal', graphs: ['terrain'], fragOnly: true, width: 190,
+  type: 'normalFromHeight', title: 'Normal From Height', cat: 'Normal', graphs: ['terrain', 'entity'], fragOnly: true, width: 190,
   desc: 'Turns a height pattern (like Noise) into bumps the light can catch. Plug into Block Output → Normal with Lit lighting on.',
   keywords: 'bump height map normal map derivative',
   inputs: [
@@ -1348,7 +1348,7 @@ def({
 });
 
 def({
-  type: 'normalStrength', title: 'Normal Strength', cat: 'Normal', graphs: ['terrain'], width: 180,
+  type: 'normalStrength', title: 'Normal Strength', cat: 'Normal', graphs: ['terrain', 'entity'], width: 180,
   desc: 'Makes bumps stronger or weaker. 0 gives the flat face normal, 1 keeps the input.',
   keywords: 'bump intensity flatten',
   inputs: [
@@ -1360,7 +1360,7 @@ def({
 });
 
 def({
-  type: 'normalBlend', title: 'Normal Blend', cat: 'Normal', graphs: ['terrain'], width: 170,
+  type: 'normalBlend', title: 'Normal Blend', cat: 'Normal', graphs: ['terrain', 'entity'], width: 170,
   desc: 'Combines the bumps of two normals into one.',
   keywords: 'combine bumps detail',
   inputs: [
@@ -1736,6 +1736,154 @@ def({
   gen: () => ({ out: { uv: 'bg_uv', px: 'floor(bg_pixel)', size: 'bg_texSize' } }),
 });
 
+// ------------------------------------------------- Items, entities, IDs
+// IDs written to item.properties / entity.properties / block.properties.
+// Block IDs stay in 10000–19999 and item IDs in 20000–29999, because Iris
+// gives block items their block.properties ID in currentRenderedItemId.
+
+const MATS = ['wooden', 'stone', 'copper', 'iron', 'golden', 'diamond', 'netherite'];
+const ARMOR_MATS = ['leather', 'chainmail', 'copper', 'iron', 'golden', 'diamond', 'netherite'];
+const WOODS = ['oak', 'spruce', 'birch', 'jungle', 'acacia', 'dark_oak', 'mangrove', 'cherry', 'pale_oak', 'bamboo', 'crimson', 'warped'];
+const COLORS = ['white', 'orange', 'magenta', 'light_blue', 'yellow', 'lime', 'pink', 'gray', 'light_gray', 'cyan', 'purple', 'blue', 'brown', 'green', 'red', 'black'];
+const cross = (a, b) => a.flatMap((x) => b.map((y) => `${x}_${y}`));
+
+export const ID_GROUPS = {
+  items: {
+    // Spears arrived in 1.21.11 (Mounts of Mayhem) and count as swords here.
+    swords: { id: 20001, label: 'Swords', names: cross(MATS, ['sword', 'spear']) },
+    tools: { id: 20002, label: 'Tools', names: [...cross(MATS, ['pickaxe', 'axe', 'shovel', 'hoe']), 'shears', 'flint_and_steel', 'fishing_rod', 'brush'] },
+    shields: { id: 20003, label: 'Shields', names: ['shield'] },
+    armor: {
+      id: 20004, label: 'Armor',
+      names: [...cross(ARMOR_MATS, ['helmet', 'chestplate', 'leggings', 'boots']), 'turtle_helmet', 'elytra', 'wolf_armor',
+        'leather_horse_armor', 'copper_horse_armor', 'iron_horse_armor', 'golden_horse_armor', 'diamond_horse_armor', 'netherite_horse_armor',
+        ...cross(['copper', 'iron', 'golden', 'diamond', 'netherite'], ['nautilus_armor'])],
+    },
+    food: {
+      id: 20005, label: 'Food',
+      names: ['apple', 'golden_apple', 'enchanted_golden_apple', 'bread', 'beef', 'cooked_beef', 'porkchop', 'cooked_porkchop', 'chicken',
+        'cooked_chicken', 'mutton', 'cooked_mutton', 'rabbit', 'cooked_rabbit', 'cod', 'cooked_cod', 'salmon', 'cooked_salmon', 'tropical_fish',
+        'pufferfish', 'carrot', 'golden_carrot', 'potato', 'baked_potato', 'poisonous_potato', 'beetroot', 'beetroot_soup', 'mushroom_stew',
+        'rabbit_stew', 'suspicious_stew', 'cookie', 'pumpkin_pie', 'melon_slice', 'glistering_melon_slice', 'sweet_berries', 'glow_berries',
+        'honey_bottle', 'dried_kelp', 'chorus_fruit', 'rotten_flesh', 'spider_eye'],
+    },
+  },
+  entities: {
+    players: { id: 30001, label: 'Players', names: ['player'] },
+    hostile: {
+      id: 30002, label: 'Hostile mobs',
+      names: ['zombie', 'husk', 'drowned', 'zombie_villager', 'zombie_nautilus', 'skeleton', 'stray', 'bogged', 'parched', 'wither_skeleton', 'creeper', 'spider',
+        'cave_spider', 'enderman', 'endermite', 'silverfish', 'witch', 'slime', 'magma_cube', 'blaze', 'ghast', 'phantom', 'pillager',
+        'vindicator', 'evoker', 'illusioner', 'ravager', 'vex', 'guardian', 'elder_guardian', 'shulker', 'hoglin', 'zoglin', 'piglin_brute',
+        'warden', 'breeze', 'creaking', 'wither', 'ender_dragon'],
+    },
+    displays: { id: 30003, label: 'Item displays', names: ['item_display', 'block_display', 'item_frame', 'glow_item_frame'] },
+    dropped: { id: 30004, label: 'Dropped items', names: ['item'] },
+  },
+  blockEntities: {
+    chests: {
+      id: 10101, label: 'Chests',
+      names: ['chest', 'trapped_chest', 'ender_chest', 'copper_chest', 'exposed_copper_chest', 'weathered_copper_chest', 'oxidized_copper_chest',
+        'waxed_copper_chest', 'waxed_exposed_copper_chest', 'waxed_weathered_copper_chest', 'waxed_oxidized_copper_chest'],
+    },
+    signs: { id: 10102, label: 'Signs', names: cross(WOODS, ['sign', 'wall_sign', 'hanging_sign', 'wall_hanging_sign']) },
+    banners: { id: 10103, label: 'Banners', names: cross(COLORS, ['banner', 'wall_banner']) },
+    beds: { id: 10104, label: 'Beds', names: cross(COLORS, ['bed']) },
+    skulls: {
+      id: 10105, label: 'Heads & skulls',
+      names: cross(['skeleton', 'wither_skeleton'], ['skull', 'wall_skull']).concat(cross(['zombie', 'player', 'creeper', 'dragon', 'piglin'], ['head', 'wall_head'])),
+    },
+    shulkers: { id: 10106, label: 'Shulker boxes', names: ['shulker_box', ...cross(COLORS, ['shulker_box'])] },
+  },
+  // Common building blocks get an ID too, so they count as "blocks as items".
+  buildingBlocks: {
+    id: 10050,
+    names: ['stone', 'cobblestone', 'mossy_cobblestone', 'dirt', 'grass_block', 'sand', 'red_sand', 'gravel', 'clay', 'glass', 'bricks',
+      'stone_bricks', 'smooth_stone', 'deepslate', 'cobbled_deepslate', 'tuff', 'calcite', 'andesite', 'diorite', 'granite', 'netherrack',
+      'obsidian', 'glowstone', 'sandstone', 'red_sandstone', 'terracotta', 'quartz_block', 'snow_block', 'ice', 'packed_ice',
+      ...cross(WOODS.filter((w) => !['bamboo', 'crimson', 'warped'].includes(w)), ['planks', 'log']), 'bamboo_planks', 'crimson_planks', 'warped_planks',
+      'coal_ore', 'iron_ore', 'copper_ore', 'gold_ore', 'diamond_ore', 'emerald_ore', 'lapis_ore', 'redstone_ore', 'coal_block', 'iron_block',
+      'copper_block', 'gold_block', 'diamond_block', 'emerald_block'],
+  },
+};
+
+const groupOptions = (g) => Object.values(g).map((x) => x.label);
+const groupByLabel = (g, label) => Object.values(g).find((x) => x.label === label);
+const ITEM_OPTIONS = [...groupOptions(ID_GROUPS.items), 'Blocks as items'];
+const itemTest = (v, label) => {
+  if (label === 'Blocks as items') return `((${v} >= 10000 && ${v} < 20000) ? 1.0 : 0.0)`;
+  const g = groupByLabel(ID_GROUPS.items, label) || ID_GROUPS.items.swords;
+  return `(${v} == ${g.id} ? 1.0 : 0.0)`;
+};
+
+def({
+  type: 'isHeld', title: 'Is Held (first person)', cat: 'Input', graphs: ['entity'], width: 190,
+  desc: '1 for the items in your own hands in first person (gbuffers_hand), 0 for everything else in this graph.',
+  keywords: 'hand first person held item viewmodel',
+  outputs: [{ id: 'out', name: 'Held', type: 'float' }],
+  gen: () => 'bg_isHeld',
+});
+
+def({
+  type: 'itemMask', title: 'Item ID Mask', cat: 'Input', graphs: ['entity'], width: 190,
+  desc: 'Is the item being drawn in this group? Works for held items, item frames, dropped items, armour stands and worn armour (currentRenderedItemId).',
+  keywords: 'item id sword tool armor food currentRenderedItemId item.properties',
+  params: [{ id: 'group', name: 'Group', kind: 'select', def: 'Swords', options: ITEM_OPTIONS }],
+  outputs: [
+    { id: 'mask', name: 'Mask', type: 'float' },
+    { id: 'id', name: 'Raw ID', type: 'float' },
+  ],
+  gen: ({ P }) => ({ out: { mask: itemTest('bg_itemId', P.group), id: 'float(bg_itemId)' } }),
+});
+
+def({
+  type: 'heldItemMask', title: 'Held Item Mask', cat: 'Input', graphs: ['terrain', 'post', 'entity'], width: 190,
+  desc: 'Is the player holding an item from this group? Works in every graph, so blocks or the whole screen can react to what you hold (heldItemId, heldItemId2).',
+  keywords: 'held item hand main off holding heldItemId',
+  params: [
+    { id: 'group', name: 'Group', kind: 'select', def: 'Swords', options: ITEM_OPTIONS },
+    { id: 'hand', name: 'Hand', kind: 'select', def: 'Either hand', options: ['Main hand', 'Off hand', 'Either hand'] },
+  ],
+  outputs: [{ id: 'mask', name: 'Mask', type: 'float' }],
+  gen: ({ P }) => {
+    const main = itemTest('bg_heldItemId', P.group);
+    const off = itemTest('bg_heldItemId2', P.group);
+    if (P.hand === 'Main hand') return main;
+    if (P.hand === 'Off hand') return off;
+    return `max(${main}, ${off})`;
+  },
+});
+
+def({
+  type: 'entityMask', title: 'Entity Type Mask', cat: 'Input', graphs: ['entity'], width: 190,
+  desc: 'Is the entity being drawn in this group (entity.properties)? Is Entity is 1 for anything drawn by gbuffers_entities.',
+  keywords: 'entity mob player zombie hostile display entityId entity.properties',
+  params: [{ id: 'group', name: 'Group', kind: 'select', def: 'Hostile mobs', options: groupOptions(ID_GROUPS.entities) }],
+  outputs: [
+    { id: 'mask', name: 'Mask', type: 'float' },
+    { id: 'any', name: 'Is Entity', type: 'float' },
+  ],
+  gen: ({ P }) => {
+    const g = groupByLabel(ID_GROUPS.entities, P.group) || ID_GROUPS.entities.hostile;
+    return { out: { mask: `(bg_entityId == ${g.id} ? 1.0 : 0.0)`, any: 'bg_isEntity' } };
+  },
+});
+
+def({
+  type: 'blockEntityMask', title: 'Block Entity Mask', cat: 'Input', graphs: ['entity'], width: 190,
+  desc: 'Is the block entity being drawn in this group (blockEntityId)? Is Block Entity is 1 for anything drawn by gbuffers_block.',
+  keywords: 'block entity chest sign banner bed skull shulker blockEntityId',
+  params: [{ id: 'group', name: 'Group', kind: 'select', def: 'Chests', options: groupOptions(ID_GROUPS.blockEntities) }],
+  outputs: [
+    { id: 'mask', name: 'Mask', type: 'float' },
+    { id: 'any', name: 'Is Block Entity', type: 'float' },
+  ],
+  gen: ({ P }) => {
+    const g = groupByLabel(ID_GROUPS.blockEntities, P.group) || ID_GROUPS.blockEntities.chests;
+    return { out: { mask: `(bg_blockEntityId == ${g.id} ? 1.0 : 0.0)`, any: 'bg_isBlockEntity' } };
+  },
+});
+
 // ----------------------------------------------------------------- Utility
 
 def({
@@ -1805,6 +1953,14 @@ def({
 });
 
 def({
+  type: 'entityOutput', title: 'Item & Entity Output', cat: 'Output', graphs: ['entity'], isOutput: true, width: 230,
+  desc: 'What held items, mobs, players, armour, dropped items, item frames and block entities look like. Same slots as the Block Output. The hurt and creeper flash (entityColor) is added for you.',
+  inputs: NODE_DEFS.terrainOutput.inputs.map((p) => ({ ...p })),
+  params: NODE_DEFS.terrainOutput.params.map((p) => ({ ...p })),
+  gen: () => ({ out: {} }),
+});
+
+def({
   type: 'postOutput', title: 'Screen Output', cat: 'Output', graphs: ['post'], isOutput: true, width: 190,
   desc: 'The final picture that reaches the screen.',
   inputs: [{ id: 'color', name: 'Color', type: 'vec3', bind: 'scene' }],
@@ -1859,6 +2015,7 @@ export const BINDS = {
     alpha: { expr: '(bg_sampleBlock(bg_uv).a * bg_vcolor.a)', type: 'float', label: 'Texture Alpha', fragOnly: true },
     light: { expr: 'bg_light', type: 'vec3', label: 'Vanilla Light' },
   },
+  entity: null,
   texture: {
     uv: { expr: 'bg_uv', type: 'vec2', label: 'Texture UV' },
     faceuv: { expr: 'bg_uv', type: 'vec2', label: 'Texture UV' },
@@ -2023,6 +2180,10 @@ float bg_musgrave(vec3 p, float detail, float dim, float lac) {
   value += rmd * (bg_gradNoise3(p) * 2.0 - 1.0) * pwr;
   return clamp(value * 0.6 + 0.5, 0.0, 1.0);
 }
+vec3 bg_safeNormalize(vec3 v) {
+  float l = dot(v, v);
+  return l > 1e-12 ? v * inversesqrt(l) : vec3(0.0, 1.0, 0.0);
+}
 vec2 bg_faceUVOf(vec3 p, vec3 n) {
   vec3 a = abs(n);
   vec2 f = a.y > 0.5 ? p.xz : (a.x > 0.5 ? vec2(p.z, -p.y) : vec2(p.x, -p.y));
@@ -2045,3 +2206,5 @@ vec3 bg_bumpNormal(float h, float strength, vec3 n, vec3 p) {
   return normalize(abs(det) * n - grad);
 }
 `;
+
+BINDS.entity = BINDS.terrain;
