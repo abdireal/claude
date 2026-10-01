@@ -1819,6 +1819,17 @@ const itemTest = (v, label) => {
 };
 
 def({
+  type: 'sunShadow', title: 'Sun Shadow', cat: 'Input', graphs: ['terrain', 'entity'], fragOnly: true, width: 180,
+  desc: '1 where sunlight reaches this pixel, 0 in shadow, read from the shadow map. Faces turned away from the sun count as shadowed. Like the main light shadow in Unity. The outputs already apply it; use this for stylised shadows.',
+  keywords: 'shadow map sun light occlusion shade dark main light attenuation',
+  outputs: [
+    { id: 'out', name: 'Sunlit', type: 'float' },
+    { id: 'strength', name: 'Strength', type: 'float' },
+  ],
+  gen: () => ({ out: { out: 'bg_shadow', strength: 'bg_shadowStrength' } }),
+});
+
+def({
   type: 'isHeld', title: 'Is Held (first person)', cat: 'Input', graphs: ['entity'], width: 190,
   desc: '1 for the items in your own hands in first person (gbuffers_hand), 0 for everything else in this graph.',
   keywords: 'hand first person held item viewmodel',
@@ -1949,6 +1960,7 @@ def({
   ],
   params: [
     { id: 'lighting', name: 'Lighting', kind: 'select', def: 'Vanilla', options: ['Vanilla', 'Lit'] },
+    { id: 'shadows', name: 'Receive sun shadows', kind: 'bool', def: true },
     { id: 'fog', name: 'Vanilla distance fog', kind: 'bool', def: true },
   ],
   gen: () => ({ out: {} }),

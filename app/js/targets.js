@@ -8,6 +8,38 @@ import { GLSL_HELPERS, GLSL_FRAG_HELPERS, NODE_DEFS, texSampler, ID_GROUPS } fro
 
 export const BLOCK_IDS = { leaves: 10001, plants: 10002, water: 10003, model: 10004 };
 
+// ------------------------------------------------------------------ shadows
+// Pack-wide sun shadows. Each value is also an option in Iris → Shader Settings.
+
+export const SHADOW_CHOICES = {
+  strength: Array.from({ length: 21 }, (_, i) => i / 20),
+  softness: [0, 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4],
+  resolution: [512, 1024, 2048, 3072, 4096],
+  distance: [32, 48, 64, 96, 128, 160, 192, 256],
+  sunAngle: Array.from({ length: 25 }, (_, i) => -60 + i * 5),
+};
+export const SHADOW_DEFAULTS = { on: true, strength: 0.6, softness: 1, resolution: 2048, distance: 128, sunAngle: -30 };
+
+const nearest = (list, v, def) => {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return def;
+  return list.reduce((best, c) => (Math.abs(c - x) < Math.abs(best - x) ? c : best), list[0]);
+};
+
+// Cleans a saved or user-edited shadow config: every value snaps to an Iris option value.
+export function normShadows(s) {
+  const d = SHADOW_DEFAULTS;
+  const o = s && typeof s === 'object' ? s : {};
+  return {
+    on: o.on === undefined ? d.on : !!o.on,
+    strength: nearest(SHADOW_CHOICES.strength, o.strength ?? d.strength, d.strength),
+    softness: nearest(SHADOW_CHOICES.softness, o.softness ?? d.softness, d.softness),
+    resolution: nearest(SHADOW_CHOICES.resolution, o.resolution ?? d.resolution, d.resolution),
+    distance: nearest(SHADOW_CHOICES.distance, o.distance ?? d.distance, d.distance),
+    sunAngle: nearest(SHADOW_CHOICES.sunAngle, o.sunAngle ?? d.sunAngle, d.sunAngle),
+  };
+}
+
 // ------------------------------------------------------------------ settings
 
 function decimalsOf(n) {
@@ -172,6 +204,7 @@ function terrainBuiltins(target, stage) {
     `float bg_viewDist = ${src.dist};`,
     'vec3 bg_viewDir = bg_safeNormalize(bg_camPos - bg_worldPos);',
     'vec2 bg_faceUV = bg_faceUVOf(bg_worldPos, bg_normal);',
+    ...shadowBuiltins(pv, v),
   );
   return lines.join('\n');
 }
@@ -221,9 +254,94 @@ function entityBuiltins(target, stage, prog) {
     `float bg_viewDist = ${src.dist};`,
     'vec3 bg_viewDir = bg_safeNormalize(bg_camPos - bg_worldPos);',
     'vec2 bg_faceUV = bg_faceUVOf(bg_worldPos, bg_normal);',
+    ...shadowBuiltins(pv, v),
   );
   return lines.join('\n');
 }
+
+// Pixel stage only: how much sun reaches this pixel (1 lit, 0 shadow), from
+// the shadow map. bg_shadowAt is defined by SHADOW_LOOKUP for each target.
+function shadowBuiltins(pv, vertex) {
+  if (vertex) return [];
+  return [
+    'float bg_shadow = bg_shadowAt(bg_worldPos, bg_normal);',
+    `float bg_shadowStrength = ${pv ? 'u_shadowStrength' : 'BG_SHADOW_STRENGTH'};`,
+  ];
+}
+
+// 4×4 percentage-closer filter: softness spreads the taps over more texels.
+const shadowPCF = (map) => `float bg_shadowPCF(vec3 sp, float spread) {
+  float sum = 0.0;
+  for (int y = 0; y < 4; y++) {
+    for (int x = 0; x < 4; x++) {
+      vec2 o = (vec2(float(x), float(y)) - 1.5) * spread;
+      sum += step(sp.z, texture(${map}, sp.xy + o).r);
+    }
+  }
+  return sum / 16.0;
+}`;
+
+// The preview uses one orthographic shadow map over the little island.
+const PREVIEW_SHADOW_LOOKUP = `uniform sampler2D u_shadowMap;
+uniform mat4 u_shadowMat;
+uniform vec3 u_shadowLight;
+uniform float u_shadowTexel;
+uniform float u_shadowSoft;
+uniform float u_shadowOn;
+${shadowPCF('u_shadowMap')}
+float bg_shadowAt(vec3 wp, vec3 N) {
+  if (u_shadowOn < 0.5) return 1.0;
+  float ndl = dot(N, u_shadowLight);
+  vec3 p = wp + N * u_shadowTexel * 1.2 + u_shadowLight * u_shadowTexel * 0.6;
+  vec4 c = u_shadowMat * vec4(p, 1.0);
+  float edge = max(abs(c.x), abs(c.y));
+  float lit = edge < 1.0 ? bg_shadowPCF(c.xyz * 0.5 + 0.5, u_shadowSoft / float(textureSize(u_shadowMap, 0).x)) : 1.0;
+  return min(lit, smoothstep(0.0, 0.08, ndl));
+}`;
+
+// Iris: shadowtex1 holds the depth of everything but translucent blocks, seen
+// from the sun (or the moon at night). The shadow map is distorted so texels
+// are small near the player, so the bias grows with distance from the centre.
+const SHADOW_DISTORT = `vec3 bg_distortShadow(vec3 p) {
+  float f = length(p.xy) + 0.1;
+  return vec3(p.xy / f, p.z * 0.5);
+}`;
+
+function irisShadowOptions(sh) {
+  const f2 = (x) => x.toFixed(2);
+  return [
+    `${sh.on ? '' : '//'}#define BG_SHADOWS // Sun shadows from a shadow map`,
+    `#define BG_SHADOW_STRENGTH ${f2(sh.strength)} // [${SHADOW_CHOICES.strength.map(f2).join(' ')}]`,
+    `#define BG_SHADOW_SOFTNESS ${f2(sh.softness)} // [${SHADOW_CHOICES.softness.map(f2).join(' ')}]`,
+  ].join('\n');
+}
+
+const IRIS_SHADOW_LOOKUP = `#ifdef BG_SHADOWS
+uniform sampler2D shadowtex1;
+uniform mat4 shadowModelView;
+uniform mat4 shadowProjection;
+${SHADOW_DISTORT}
+${shadowPCF('shadowtex1')}
+#endif
+float bg_shadowAt(vec3 wp, vec3 N) {
+#ifdef BG_SHADOWS
+  vec3 L = normalize(vec3(shadowModelView[0].z, shadowModelView[1].z, shadowModelView[2].z));
+  float ndl = dot(N, L);
+  float facing = smoothstep(0.0, 0.08, ndl);
+  vec3 pp = wp - cameraPosition;
+  vec4 c0 = shadowProjection * (shadowModelView * vec4(pp, 1.0));
+  float edge = max(abs(c0.x), abs(c0.y));
+  if (edge >= 1.0) return facing;
+  float res = float(textureSize(shadowtex1, 0).x);
+  float r = length(c0.xy) + 0.1;
+  float texel = 20.0 * r * r / (shadowProjection[0][0] * res);
+  vec4 c = shadowProjection * (shadowModelView * vec4(pp + N * texel * 1.2 + L * texel * 0.6, 1.0));
+  float lit = bg_shadowPCF(bg_distortShadow(c.xyz) * 0.5 + 0.5, BG_SHADOW_SOFTNESS / res);
+  return mix(min(lit, facing), facing, smoothstep(0.85, 1.0, edge));
+#else
+  return 1.0;
+#endif
+}`;
 
 function postBuiltins(target) {
   const pv = target === 'preview';
@@ -244,6 +362,8 @@ function surfaceToColor(o, params, target, opts = {}) {
     `float bg_clip = ${o.clip};`,
     `if (bg_alpha < bg_clip) discard;`,
     'vec3 rgb = bg_col * bg_lit * bg_ao;',
+    'float bg_sunVis = bg_daylight * bg_lm.y * bg_lm.y * (1.0 - bg_rain * 0.75);',
+    `float bg_shade = ${params.shadows === false ? '1.0; // Receive sun shadows is off' : 'bg_shadow;'}`,
   ];
   if (lit) {
     lines.push(
@@ -251,20 +371,27 @@ function surfaceToColor(o, params, target, opts = {}) {
       `vec3 bg_N = normalize(${o.normal});`,
       `float bg_sm = clamp(${o.smooth}, 0.0, 1.0);`,
       `float bg_mt = clamp(${o.metal}, 0.0, 1.0);`,
-      'float bg_sunVis = bg_daylight * bg_lm.y * bg_lm.y * (1.0 - bg_rain * 0.75);',
       'float bg_ndl = dot(bg_N, bg_sunDir);',
-      'rgb *= mix(1.0, 0.72 + 0.5 * max(bg_ndl, 0.0), bg_sunVis) * (1.0 - 0.6 * bg_mt);',
+      '// Shadows block the direct sun; the sky dome (0.55) still fills them.',
+      'float bg_direct = max(bg_ndl, 0.0) * mix(1.0, bg_shade, bg_shadowStrength);',
+      'rgb *= mix(1.0, 0.55 + 0.67 * bg_direct, bg_sunVis) * (1.0 - 0.6 * bg_mt);',
       'vec3 bg_H = normalize(bg_sunDir + bg_viewDir);',
       'float bg_exp = mix(6.0, 600.0, bg_sm * bg_sm);',
       'vec3 bg_F0 = mix(vec3(0.04), bg_col, bg_mt);',
       'vec3 bg_F = bg_F0 + (1.0 - bg_F0) * pow(1.0 - max(dot(bg_N, bg_viewDir), 0.0), 5.0);',
       'float bg_spec = pow(max(dot(bg_N, bg_H), 0.0), bg_exp) * (bg_exp + 8.0) / 25.13 * step(0.0, bg_ndl);',
-      'rgb += bg_F * bg_spec * bg_sm * bg_sunVis * vec3(1.0, 0.95, 0.85);',
+      'rgb += bg_F * bg_spec * bg_sm * bg_sunVis * mix(1.0, bg_shade, bg_shadowStrength) * vec3(1.0, 0.95, 0.85);',
       '// Cheap sky reflection for metals: the sky colour above, the fog colour at the horizon.',
       'vec3 bg_R = reflect(-bg_viewDir, bg_N);',
       'float bg_skyVis = bg_lm.y * bg_lm.y * (0.3 + 0.7 * bg_daylight);',
       'vec3 bg_env = mix(bg_fogColor, bg_skyColor, smoothstep(-0.15, 0.55, bg_R.y)) * mix(0.35, 1.0, step(0.0, bg_R.y));',
       'rgb += bg_F * bg_env * bg_skyVis * bg_mt * (0.25 + 0.75 * bg_sm);',
+    );
+  }
+  if (!lit) {
+    lines.push(
+      '// Vanilla: sun shadows darken the skylight, never torchlight, and never to black.',
+      'rgb *= 1.0 - 0.8 * bg_shadowStrength * (1.0 - bg_shade) * bg_sunVis;',
     );
   }
   lines.push('rgb += bg_col * bg_emit;');
@@ -288,7 +415,8 @@ uniform float u_time;
 uniform float u_dayTime;
 uniform float u_rain;
 uniform int u_heldItem;
-uniform int u_heldItem2;`;
+uniform int u_heldItem2;
+uniform float u_shadowStrength;`;
 
 const PREVIEW_ENTITY_UNIFORMS = `uniform int u_itemId;
 uniform int u_entityId;
@@ -367,6 +495,7 @@ out vec4 fragColor;
 ${GLSL_HELPERS}
 ${GLSL_FRAG_HELPERS}
 ${PREVIEW_LIGHT}
+${PREVIEW_SHADOW_LOOKUP}
 vec4 bg_sampleBlock(vec2 uv) { return texture(u_atlas, uv); }
 vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(u_atlas, uv, lod); }
 ${fFns}
@@ -469,6 +598,7 @@ out vec4 fragColor;
 ${GLSL_HELPERS}
 ${GLSL_FRAG_HELPERS}
 ${PREVIEW_LIGHT}
+${PREVIEW_SHADOW_LOOKUP}
 vec4 bg_sampleBlock(vec2 uv) { return texture(u_atlas, uv); }
 vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(u_atlas, uv, lod); }
 ${c.eFrag.functions.join('\n')}
@@ -480,7 +610,20 @@ ${indent(surfaceToColor(eo, c.eFrag.outParams, 'preview', { flash: 'u_entityColo
 }
 `;
 
-  return { terrainVS, terrainFS, entityVS, entityFS, postFS, settings: c.settings, errors: c.errors };
+  // Draws terrain, mobs and block entities into the preview shadow map, with
+  // the graphs' own vertex shaders so waving plants cast waving shadows.
+  const shadowFS = `#version 300 es
+precision highp float;
+uniform sampler2D u_atlas;
+in vec2 v_uv;
+out vec4 fragColor;
+void main() {
+  if (texture(u_atlas, v_uv).a < 0.1) discard;
+  fragColor = vec4(1.0);
+}
+`;
+
+  return { terrainVS, terrainFS, entityVS, entityFS, postFS, shadowFS, settings: c.settings, errors: c.errors };
 }
 
 // ------------------------------------------------------------- node previews
@@ -560,7 +703,9 @@ ${indent(COMMON_TIME(true), '  ')}
   float bg_plantTop = step(0.0, p.y);
   float bg_viewDist = 8.0;
   vec3 bg_viewDir = vec3(0.0, 0.0, 1.0);
-  vec2 bg_faceUV = fract(sph * vec2(4.0, 2.0));${ids}
+  vec2 bg_faceUV = fract(sph * vec2(4.0, 2.0));
+  float bg_shadow = smoothstep(0.0, 0.08, dot(n, bg_sunDir));
+  float bg_shadowStrength = u_shadowStrength;${ids}
 ${indent([body], '  ')}
   vec3 c = clamp(${viz}, 0.0, 1.0);
   fragColor = vec4(c, 1.0);
@@ -665,7 +810,7 @@ function settingsUsedIn(stageResult, all) {
   return m;
 }
 
-function irisTerrain(c, programName) {
+function irisTerrain(c, programName, sh) {
   const vSet = settingsUsedIn(c.tVert, c.settings);
   const fSet = settingsUsedIn(c.tFrag, c.settings);
   const o = c.tFrag.outputs;
@@ -720,6 +865,7 @@ ${indent(c.tVert.lines.length ? c.tVert.lines : ['// (nothing is wired into Vert
 
   const fsh = `${HEADER(`${programName}.fsh: Blocks graph, pixel stage`)}
 ${irisSettingDefines(fSet)}
+${irisShadowOptions(sh)}
 
 ${IRIS_COMMON_UNIFORMS}
 uniform sampler2D gtexture;
@@ -739,6 +885,7 @@ flat in int blockId;
 layout(location = 0) out vec4 outColor0;
 ${GLSL_HELPERS}
 ${GLSL_FRAG_HELPERS}
+${IRIS_SHADOW_LOOKUP}
 vec4 bg_sampleBlock(vec2 uv) { return texture(gtexture, uv); }
 vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(gtexture, uv, lod); }
 ${c.tFrag.functions.join('\n')}
@@ -753,13 +900,78 @@ ${indent(surfaceToColor(o, c.tFrag.outParams, 'iris'))}
   return { vsh, fsh };
 }
 
+// shadow.vsh / shadow.fsh: draws terrain, mobs and block entities from the
+// sun into shadowtex. The Blocks graph's Vertex Offset runs here too, so
+// waving leaves and plants cast waving shadows.
+function irisShadow(c) {
+  const vSet = settingsUsedIn(c.tVert, c.settings);
+  const vsh = `${HEADER('shadow.vsh: the shadow pass. Runs the Blocks graph Vertex Offset so moving blocks cast matching shadows.')}
+${irisSettingDefines(vSet)}
+
+${IRIS_COMMON_UNIFORMS}
+uniform mat4 shadowModelView;
+uniform mat4 shadowModelViewInverse;
+uniform mat4 shadowProjection;
+uniform sampler2D gtexture;
+uniform sampler2D lightmap;
+
+in vec4 mc_Entity;
+in vec2 mc_midTexCoord;
+
+out vec2 texcoord;
+out vec2 lmcoord;
+out vec4 glcolor;
+${GLSL_HELPERS}
+${SHADOW_DISTORT}
+vec4 bg_sampleBlock(vec2 uv) { return textureLod(gtexture, uv, 0.0); }
+vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(gtexture, uv, lod); }
+${c.tVert.functions.join('\n')}
+void main() {
+	texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
+	lmcoord = (gl_TextureMatrix[1] * gl_MultiTexCoord1).xy;
+	glcolor = gl_Color;
+	int id = int(mc_Entity.x + 0.5);
+	float top = gl_MultiTexCoord0.y < mc_midTexCoord.y ? 1.0 : 0.0;
+
+	vec4 playerPos = shadowModelViewInverse * (gl_ModelViewMatrix * gl_Vertex);
+	vec3 wPos = playerPos.xyz + cameraPosition;
+	vec3 wNormal = bg_safeNormalize(mat3(shadowModelViewInverse) * (gl_NormalMatrix * gl_Normal));
+
+${indent([terrainBuiltins('iris', 'vertex')])}
+
+${indent(c.tVert.lines.length ? c.tVert.lines : ['// (nothing is wired into Vertex Offset)'])}
+	vec3 bg_offset = ${c.tVert.outputs.offset || 'vec3(0.0)'};
+
+	playerPos.xyz += bg_offset;
+	gl_Position = shadowProjection * (shadowModelView * playerPos);
+	gl_Position.xyz = bg_distortShadow(gl_Position.xyz);
+}
+`;
+  const fsh = `${HEADER('shadow.fsh: cut-out pixels (leaves, plants, glass panes) let light through')}
+uniform sampler2D gtexture;
+
+in vec2 texcoord;
+in vec4 glcolor;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 shadowColor0;
+
+void main() {
+	vec4 c = texture(gtexture, texcoord) * glcolor;
+	if (c.a < 0.1) discard;
+	shadowColor0 = c;
+}
+`;
+  return { vsh, fsh };
+}
+
 const ENTITY_WHAT = {
   hand: 'items in your hands, first person',
   entity: 'mobs, players, worn armour, dropped items, item frames and item displays',
   block: 'block entities: chests, signs, banners, beds, heads and shulker boxes',
 };
 
-function irisEntity(c, programName, prog) {
+function irisEntity(c, programName, prog, sh) {
   const vSet = settingsUsedIn(c.eVert, c.settings);
   const fSet = settingsUsedIn(c.eFrag, c.settings);
   const o = c.eFrag.outputs;
@@ -806,6 +1018,7 @@ ${indent(c.eVert.lines.length ? c.eVert.lines : ['// (nothing is wired into Vert
 `;
   const fsh = `${HEADER(`${programName}.fsh: Items & Entities graph, pixel stage. Draws ${ENTITY_WHAT[prog]}.`)}
 ${irisSettingDefines(fSet)}
+${irisShadowOptions(sh)}
 
 ${IRIS_COMMON_UNIFORMS}
 uniform sampler2D gtexture;
@@ -826,6 +1039,7 @@ in float viewDist;
 layout(location = 0) out vec4 outColor0;
 ${GLSL_HELPERS}
 ${GLSL_FRAG_HELPERS}
+${IRIS_SHADOW_LOOKUP}
 vec4 bg_sampleBlock(vec2 uv) { return texture(gtexture, uv); }
 vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(gtexture, uv, lod); }
 ${c.eFrag.functions.join('\n')}
@@ -840,7 +1054,17 @@ ${indent(surfaceToColor(o, c.eFrag.outParams, 'iris', { flash: 'entityColor' }))
   return { vsh, fsh };
 }
 
-function irisComposite(c) {
+// Iris reads these constants from any program; composite always exists.
+function irisShadowConsts(sh) {
+  const f1 = (x) => x.toFixed(1);
+  return [
+    `const int shadowMapResolution = ${sh.resolution}; // [${SHADOW_CHOICES.resolution.join(' ')}]`,
+    `const float shadowDistance = ${f1(sh.distance)}; // [${SHADOW_CHOICES.distance.map(f1).join(' ')}]`,
+    `const float sunPathRotation = ${f1(sh.sunAngle)}; // [${SHADOW_CHOICES.sunAngle.map(f1).join(' ')}]`,
+  ].join('\n');
+}
+
+function irisComposite(c, sh) {
   const set = settingsUsedIn(c.post, c.settings);
   const vsh = `${HEADER('composite.vsh: full-screen pass for the Post FX graph')}
 out vec2 texcoord;
@@ -852,6 +1076,7 @@ void main() {
 `;
   const fsh = `${HEADER('composite.fsh: Post FX graph')}
 ${irisSettingDefines(set)}
+${irisShadowConsts(sh)}
 
 ${IRIS_COMMON_UNIFORMS}
 uniform sampler2D colortex0;
@@ -1072,9 +1297,11 @@ const PLANTS = [
 
 export function buildIris(graphs, opts = {}) {
   const c = compileAll(graphs);
-  const terrain = irisTerrain(c, 'gbuffers_terrain');
-  const water = irisTerrain(c, 'gbuffers_water');
-  const comp = irisComposite(c);
+  const sh = normShadows(opts.shadows);
+  const terrain = irisTerrain(c, 'gbuffers_terrain', sh);
+  const water = irisTerrain(c, 'gbuffers_water', sh);
+  const comp = irisComposite(c, sh);
+  const shadow = irisShadow(c);
   const files = {};
   files['shaders/gbuffers_terrain.vsh'] = terrain.vsh;
   files['shaders/gbuffers_terrain.fsh'] = terrain.fsh;
@@ -1082,12 +1309,14 @@ export function buildIris(graphs, opts = {}) {
   files['shaders/gbuffers_water.fsh'] = water.fsh;
   files['shaders/composite.vsh'] = comp.vsh;
   files['shaders/composite.fsh'] = comp.fsh;
+  files['shaders/shadow.vsh'] = shadow.vsh;
+  files['shaders/shadow.fsh'] = shadow.fsh;
   for (const [name, prog] of [
     ['gbuffers_hand', 'hand'], ['gbuffers_hand_water', 'hand'],
     ['gbuffers_entities', 'entity'], ['gbuffers_entities_translucent', 'entity'],
     ['gbuffers_block', 'block'], ['gbuffers_block_translucent', 'block'],
   ]) {
-    const e = irisEntity(c, name, prog);
+    const e = irisEntity(c, name, prog, sh);
     files[`shaders/${name}.vsh`] = e.vsh;
     files[`shaders/${name}.fsh`] = e.fsh;
   }
@@ -1126,23 +1355,46 @@ export function buildIris(graphs, opts = {}) {
 
   const names = [...c.settings.keys()];
   const sliders = names.filter((n) => c.settings.get(n).kind === 'slider');
+  const shadowOpts = ['BG_SHADOWS', 'BG_SHADOW_STRENGTH', 'BG_SHADOW_SOFTNESS', 'shadowMapResolution', 'shadowDistance', 'sunPathRotation'];
   const props = [
     `# ${opts.name || 'BlockGraph pack'}, made with BlockGraph.`,
     '# Keep vanilla per-face shading so blocks read as 3D.',
     'oldLighting = true',
+    '',
+    '# Sun shadows. Turning Shadows off in game skips the shadow pass entirely.',
+    'program.shadow.enabled = BG_SHADOWS',
+    'shadowTerrain = true',
+    'shadowEntities = true',
+    'shadowBlockEntities = true',
   ];
   if (opts.customTextures?.length) {
     props.push('', '# Textures from the Textures tab, used by Image Texture nodes.');
     for (const t of opts.customTextures) props.push(`customTexture.${texSampler(t.id)} = textures/${texSampler(t.id)}.png`);
   }
-  if (names.length) {
-    props.push('', '# Settings menu (Iris → Shader Settings). Built from your Slider, On/Off and Dropdown nodes.');
-    props.push(`screen = ${names.join(' ')}`);
-    if (sliders.length) props.push(`sliders = ${sliders.join(' ')}`);
-  }
+  props.push('', '# Settings menu (Iris → Shader Settings). Built from your Slider, On/Off and Dropdown nodes,');
+  props.push('# plus a Shadows page.');
+  props.push(`screen = [SHADOWS]${names.length ? ' ' + names.join(' ') : ''}`);
+  props.push(`screen.SHADOWS = ${shadowOpts.join(' ')}`);
+  props.push(`sliders = ${[...sliders, ...shadowOpts.slice(1)].join(' ')}`);
   files['shaders/shaders.properties'] = props.join('\n') + '\n';
 
-  const lang = ['# Labels for the settings menu'];
+  const lang = [
+    '# Labels for the settings menu',
+    'screen.SHADOWS=Shadows',
+    'screen.SHADOWS.comment=Sun shadows from a shadow map. Made with BlockGraph.',
+    'option.BG_SHADOWS=Shadows',
+    'option.BG_SHADOWS.comment=Blocks, mobs and chests cast shadows in sunlight. Off skips the shadow pass for more FPS.',
+    'option.BG_SHADOW_STRENGTH=Shadow Strength',
+    'option.BG_SHADOW_STRENGTH.comment=How dark shadows are. 0 hides them.',
+    'option.BG_SHADOW_SOFTNESS=Shadow Softness',
+    'option.BG_SHADOW_SOFTNESS.comment=Blur on shadow edges, in shadow map pixels.',
+    'option.shadowMapResolution=Shadow Quality',
+    'option.shadowMapResolution.comment=Size of the shadow map. Higher is sharper and slower.',
+    'option.shadowDistance=Shadow Distance',
+    'option.shadowDistance.comment=How far from you shadows are drawn, in blocks.',
+    'option.sunPathRotation=Sun Angle',
+    'option.sunPathRotation.comment=Tilts the path of the sun and moon so shadows fall to one side at noon.',
+  ];
   for (const n of names) {
     const s = c.settings.get(n);
     lang.push(`option.${n}=${String(s.label || n).replace(/\n/g, ' ')}`);

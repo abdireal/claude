@@ -9,14 +9,15 @@ It works like Unity Shader Graph: every node is a small piece of GLSL, and the g
 - **Three shader graphs.** *Blocks* runs on every block (exports to `gbuffers_terrain` and `gbuffers_water`). *Items & Entities* runs on held items, dropped items, item frames, item displays, armour, mobs, players and block entities such as chests, signs, banners, beds, skulls and shulker boxes. *Post FX* runs on the finished screen image (exports to `composite`).
 - **Textures tab: a resource pack creator.** Build textures with Blender-style nodes (Brick, Wave, Magic, Musgrave, Voronoi, Noise, White Noise, Gradient), pixel-paint on top (pencil, eraser, fill, colour picker), or upload PNGs (for example textures baked in Blender). Pick which Minecraft texture each one replaces, see it in the live preview under your shader, and export a resource pack (format 75, Minecraft 1.21.11). The **Image Texture** node samples any of them inside a shader, and they ship in the shader pack as Iris custom textures.
 - **Models tab: real 3D models for items and blocks.** Import OBJ (with MTL), GLB or glTF files (from Blender: File → Export → glTF 2.0), or start from a sample: **Sting** (Bilbo's sword, replacing the netherite sword), a simple sword or a crystal block. Choose what the model is for (replace an item like `diamond_sword`, a new item id for `/give` and item displays, or replace a block like `flower_pot`), fit it into the block with pose presets, and give each material a texture from the Textures tab, where you paint it with the model's UVs drawn on top. The live preview shows item models in your hand under the Items & Entities graph and block models on the grass under the Blocks graph, where **Block Type → Custom Models** singles them out. Models ship in the resource pack and need the small client-side [BlockGraph Models mod](mod/README.md).
+- **Sun shadows.** A real Iris shadow pass (`shadow.vsh`/`shadow.fsh`). Blocks, mobs, players and chests cast shadows onto blocks, water, items, mobs and block entities. Cut-out leaves and plants give dappled shadows, and the Blocks graph's Vertex Offset runs in the shadow pass, so waving plants cast waving shadows. Strength, softness, quality, distance and sun angle are set in the Graph panel and become a *Shadows* page in Iris → Shader Settings.
 - **Masks that tell objects apart.** Is Held (first person), Item ID Mask, Held Item Mask, Entity Type Mask and Block Entity Mask. Ready-made groups: swords (and 1.21.11 spears), tools, shields, armour, food, blocks as items, players, hostile mobs, item displays, dropped items, chests, signs, banners, beds, skulls and shulker boxes.
-- **About 145 nodes, following Unity Shader Graph's library.** Inputs (block texture and LOD, biome tint, light, block type masks, face UV, view direction, screen position, sun and sky, camera, time and weather), Math (basic, advanced, range, round, interpolation, derivatives, random), Trigonometry and waves, Vector and channel (cross, projection, reflection, refract, rotate about axis, sphere mask, swizzle, flip, channel mask), Logic (branch, comparison, and, or, not), Artistic colour (blend with 21 modes, white balance, replace colour, colour mask, channel mixer, invert, colourspace conversion, dither, gradient, blackbody, metal reflectance), Normal (from height, strength, blend), UV (tiling and offset, rotate, twirl, polar, spherize, radial shear), Procedural (noise, gradient noise, Voronoi, checkerboard, ellipse, rectangle, rounded rectangle, polygon) and screen effects.
+- **About 146 nodes, following Unity Shader Graph's library.** Inputs (block texture and LOD, biome tint, light, block type masks, face UV, view direction, screen position, sun and sky, camera, time and weather), Math (basic, advanced, range, round, interpolation, derivatives, random), Trigonometry and waves, Vector and channel (cross, projection, reflection, refract, rotate about axis, sphere mask, swizzle, flip, channel mask), Logic (branch, comparison, and, or, not), Artistic colour (blend with 21 modes, white balance, replace colour, colour mask, channel mixer, invert, colourspace conversion, dither, gradient, blackbody, metal reflectance), Normal (from height, strength, blend), UV (tiling and offset, rotate, twirl, polar, spherize, radial shear), Procedural (noise, gradient noise, Voronoi, checkerboard, ellipse, rectangle, rounded rectangle, polygon) and screen effects.
 - **Live preview on every node**, like Unity: a lit ball for block nodes, the real scene for Post FX nodes.
-- **Lit output.** The Block Output and the Item & Entity Output work like Unity's Master Stack: Color, Alpha, Normal, Smoothness, Metallic, Ambient Occlusion, Emission, Alpha Clip and Vertex Offset, with Vanilla or Lit lighting. Lit adds sun shading, a specular highlight and a cheap sky reflection on metallic surfaces, so metal swords and armour shine.
+- **Lit output.** The Block Output and the Item & Entity Output work like Unity's Master Stack: Color, Alpha, Normal, Smoothness, Metallic, Ambient Occlusion, Emission, Alpha Clip and Vertex Offset, with Vanilla or Lit lighting. Lit adds sun shading, a specular highlight and a cheap sky reflection on metallic surfaces, so metal swords and armour shine. Both receive sun shadows (switch off with *Receive sun shadows*), and the **Sun Shadow** node gives you the shadow as a value for stylised looks.
 - **Custom Function** for your own GLSL, **Sticky Notes**, **Reroute** nodes and collapsible library categories.
 - **Vertex Offset.** Wire anything into it to move blocks themselves, for waving leaves and plants or rolling water.
 - **In-game settings.** Slider, On/Off and Dropdown Setting nodes become options in Iris → Shader Settings, with `shaders.properties` and language labels written for you.
-- **Live preview.** A small Minecraft-style scene in WebGL2 with procedural textures, day/night and rain controls. A held sword and shield, a chest and a zombie (which flashes red when hurt) use the Items & Entities graph.
+- **Live preview.** A small Minecraft-style scene in WebGL2 with procedural textures, day/night and rain controls, and its own shadow map. A held sword and shield, a chest and a zombie (which flashes red when hurt) use the Items & Entities graph.
 - **Presets.** Waving Plants, Shiny Weapons, Toon World, Retro TV, Night Vision, Dreamy Glow, Ocean Waves, Tiny Planet, Comic Outline, Lit & Bumpy and a blank start.
 - **View code.** See the exact GLSL each node produces.
 - Undo/redo, copy/paste, box select, autosave in the browser, and save/open graph files.
@@ -45,6 +46,23 @@ Its output compiles into six Iris programs:
 - **Models made with the BlockGraph Models mod.** OBJ meshes are drawn through the normal item and block paths, so they get these shaders too. The entity programs only use standard vertex data (position, UV, lightmap, colour and normal) and normalize safely, so meshes without `mc_Entity`, `mc_midTexCoord` or with zero-length normals still render. On terrain, missing `mc_Entity` and `mc_midTexCoord` read as 0, so modelled blocks simply don't wave.
 
 The **Shiny Weapons** preset shows it off: swords, tools, armour and shields are masked with Item ID Mask, their bright (metal) pixels get high Smoothness and Metallic, and Lit lighting makes them catch the sun and reflect the sky. A *Weapon Shine* slider appears in Iris → Shader Settings.
+
+## Shadows
+
+| Setting | Iris option | What it does |
+| --- | --- | --- |
+| Sun shadows | `BG_SHADOWS` | Turns the shadow pass on or off (`program.shadow.enabled`), so off costs no FPS |
+| Strength | `BG_SHADOW_STRENGTH` | How dark shadows get. Only sunlight is blocked; torchlight is untouched |
+| Softness | `BG_SHADOW_SOFTNESS` | Blur on shadow edges, in shadow map pixels (4×4 PCF) |
+| Quality | `shadowMapResolution` | Shadow map size, 512 to 4096 |
+| Distance | `shadowDistance` | How far from the player shadows reach, 32 to 256 blocks |
+| Sun angle | `sunPathRotation` | Tilts the sun's path so noon shadows fall to one side |
+
+- The shadow map is distorted toward the player, so nearby shadows are sharp. The depth bias grows with distance to match.
+- Shadows are read from `shadowtex1`, so water and stained glass don't cast solid shadows.
+- Faces turned away from the sun count as shadowed. Shadows fade with rain and at night.
+- Vanilla lighting darkens the skylight in shadow. Lit lighting removes the direct sun and its highlight but keeps sky fill, so shadows never go fully black.
+- Mobs and block entities use the Blocks graph's Vertex Offset in the shadow pass too (it usually masks itself to plants, so they stay still).
 
 ## Install an exported pack
 
@@ -99,7 +117,7 @@ Generated shaders are written to be valid both as GLSL ES 3.00 (preview) and GLS
 
 ## Limits of this version
 
-- No shadows, reflections or volumetric light yet. Those need extra Iris passes.
+- No coloured shadows through stained glass, screen-space reflections or volumetric light yet.
 - Unity features with no Minecraft equivalent are left out: Sub Graphs, matrix nodes, texture and cubemap asset nodes, parallax mapping, object and reflection probe data.
 - Sky, clouds, particles, beacon beams and spider eyes use simple vanilla-style shaders. The graphs cover blocks, items, entities, block entities and the screen.
 - The sky reflection is a cheap gradient (sky colour above, fog colour at the horizon), not a real reflection of the world.
