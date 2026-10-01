@@ -3,6 +3,7 @@
 // mobs and chests → water → hand → post.
 
 import { SHADOW_DEFAULTS } from './targets.js';
+import { FLAT_NORMAL, NO_SPECULAR, boxDownscale } from './pbr.js';
 
 // ------------------------------------------------------------------ math
 
@@ -641,6 +642,15 @@ export class Preview {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
 
+    // Material maps (LabPBR _n and _s) laid out like the colour atlas. Kept as
+    // raw bytes: a canvas would premultiply the specular alpha (emission).
+    const side = TILE_PX * ATLAS_TILES;
+    this.normalData = new Uint8Array(side * side * 4);
+    for (let i = 0; i < this.normalData.length; i += 4) this.normalData.set(FLAT_NORMAL, i);
+    this.specData = new Uint8Array(side * side * 4);
+    this.normalAtlas = this.dataTexture(this.normalData, side);
+    this.specAtlas = this.dataTexture(this.specData, side);
+
     const scene = buildScene();
     const em = buildEntityMeshes();
     this.entityMeshes = {
@@ -677,6 +687,19 @@ export class Preview {
     gl.readBuffer(gl.NONE);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     gl.bindTexture(gl.TEXTURE_2D, null);
+  }
+
+  dataTexture(data, side) {
+    const gl = this.gl;
+    const t = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, side, side, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    return t;
   }
 
   makeMesh(data) {
@@ -1139,6 +1162,32 @@ export class Preview {
     this.invalidateNodePreviews();
   }
 
+  // Puts a normal map and a specular map ({ data, width, height } in LabPBR
+  // format, or null for flat and matte) on one tile of the material atlases.
+  setTilePbr(tile, normal, spec) {
+    if (!this.ok || tile == null) return;
+    const gl = this.gl;
+    const side = TILE_PX * ATLAS_TILES;
+    const x0 = (tile % ATLAS_TILES) * TILE_PX, y0 = Math.floor(tile / ATLAS_TILES) * TILE_PX;
+    for (const [img, data, tex, def, isNormal] of [
+      [normal, this.normalData, this.normalAtlas, FLAT_NORMAL, true],
+      [spec, this.specData, this.specAtlas, NO_SPECULAR, false],
+    ]) {
+      const px = img ? boxDownscale(img.data, img.width, img.height, TILE_PX, TILE_PX, isNormal) : null;
+      for (let y = 0; y < TILE_PX; y++) {
+        for (let x = 0; x < TILE_PX; x++) {
+          const o = ((y0 + y) * side + x0 + x) * 4;
+          if (px) data.set(px.subarray((y * TILE_PX + x) * 4, (y * TILE_PX + x) * 4 + 4), o);
+          else data.set(def, o);
+        }
+      }
+      gl.bindTexture(gl.TEXTURE_2D, tex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, side, side, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    this.invalidateNodePreviews();
+  }
+
   // Textures that Image Texture nodes sample (bg_tex_<id>).
   setCustomTexture(id, img, { blur = true } = {}) {
     if (!this.ok) return;
@@ -1315,6 +1364,16 @@ export class Preview {
       gl.uniform1f(u.u_shadowSoft, this.shadow.softness);
     }
     if (u.u_projInv) gl.uniformMatrix4fv(u.u_projInv, false, f.projInv);
+    // Material atlases sit on the last two units, clear of custom textures (4+).
+    if (u.u_normalAtlas || u.u_specAtlas) {
+      gl.activeTexture(gl.TEXTURE14);
+      gl.bindTexture(gl.TEXTURE_2D, this.normalAtlas);
+      gl.activeTexture(gl.TEXTURE15);
+      gl.bindTexture(gl.TEXTURE_2D, this.specAtlas);
+      gl.activeTexture(gl.TEXTURE0);
+      if (u.u_normalAtlas) gl.uniform1i(u.u_normalAtlas, 14);
+      if (u.u_specAtlas) gl.uniform1i(u.u_specAtlas, 15);
+    }
     this.applySettings(u);
   }
 

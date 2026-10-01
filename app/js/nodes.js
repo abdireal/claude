@@ -168,6 +168,38 @@ def({
   gen: ({ I }) => `pow(1.0 - clamp(dot(bg_normal, bg_viewDir), 0.0, 1.0), ${I.p})`,
 });
 
+def({
+  type: 'materialMaps', title: 'Material Maps', cat: 'Input', graphs: ['terrain', 'entity'], fragOnly: true, width: 200,
+  desc: 'The normal map and specular map that come with the texture (LabPBR _n and _s files, which the Models tab exports for 3D models). Plug Normal, Smoothness, Metallic, Emission and AO into the output with Lighting set to Lit. Textures without maps read as flat and matte.',
+  keywords: 'pbr labpbr normal map specular roughness smoothness metal metallic emission glow ao occlusion _n _s realistic',
+  inputs: [
+    { id: 'uv', name: 'UV', type: 'vec2', bind: 'uv' },
+    { id: 's', name: 'Bump Strength', type: 'float', def: 1 },
+  ],
+  outputs: [
+    { id: 'n', name: 'Normal', type: 'vec3' },
+    { id: 'smooth', name: 'Smoothness', type: 'float' },
+    { id: 'metal', name: 'Metallic', type: 'float' },
+    { id: 'emit', name: 'Emission', type: 'float' },
+    { id: 'ao', name: 'AO', type: 'float' },
+  ],
+  gen: ({ I, V }) => ({
+    pre: [
+      `vec4 ${V}nm = bg_normalMapAt(${I.uv});`,
+      `vec4 ${V}sm = bg_specularMapAt(${I.uv});`,
+      `vec2 ${V}xy = ${V}nm.xy * 2.0 - 1.0;`,
+      `vec3 ${V}tn = dot(${V}nm.rgb, ${V}nm.rgb) < 0.01 ? vec3(0.0, 0.0, 1.0) : vec3(${V}xy * ${I.s}, sqrt(clamp(1.0 - dot(${V}xy, ${V}xy), 0.0, 1.0)));`,
+    ].join('\n'),
+    out: {
+      n: `bg_applyNormalMap(normalize(${V}tn), bg_normal, bg_worldPos, ${I.uv})`,
+      smooth: `${V}sm.r`,
+      metal: `step(229.5 / 255.0, ${V}sm.g)`,
+      emit: `${V}sm.a < 254.5 / 255.0 ? ${V}sm.a * (255.0 / 254.0) : 0.0`,
+      ao: `dot(${V}nm.rgb, ${V}nm.rgb) < 0.01 ? 1.0 : ${V}nm.b`,
+    },
+  }),
+});
+
 // --------------------------------------------------------------- Screen inputs
 
 def({
@@ -1945,7 +1977,7 @@ def({
 
 def({
   type: 'terrainOutput', title: 'Block Output', cat: 'Output', graphs: ['terrain'], isOutput: true, width: 220,
-  desc: 'What every block finally looks like, like Unity’s Master Stack. Vanilla: Color × Light × AO + Color × Emission. Lit also adds sun shading and a specular highlight from Normal, Smoothness and Metallic.',
+  desc: 'What every block finally looks like, like Unity’s Master Stack. Vanilla: Color × Light × AO + Color × Emission. Lit also adds sun shading, a sun highlight and sky reflections from Normal, Smoothness and Metallic; in game, smooth surfaces also reflect what is on screen.',
   inputs: [
     { id: 'color', name: 'Color', type: 'vec3', bind: 'albedo' },
     { id: 'alpha', name: 'Alpha', type: 'float', bind: 'alpha' },
@@ -2048,6 +2080,28 @@ export const BINDS = {
 // Shared GLSL helper functions, valid in GLSL ES 3.00 and GLSL 330.
 export const GLSL_HELPERS = `
 float bg_luma(vec3 c) { return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+// What a smooth surface reflects when nothing on screen is in the way: the
+// sky above the horizon and a dark ground below, both blurrier when rough.
+vec3 bg_envColor(vec3 R, float rough, vec3 sky, vec3 fog) {
+  float w = 0.03 + rough * 0.6;
+  vec3 above = mix(fog, sky, smoothstep(-0.1, 0.6 + rough, R.y));
+  vec3 below = fog * 0.6;
+  return mix(below, above, smoothstep(-w, w, R.y));
+}
+// Unit vectors packed into two 0-1 numbers (octahedral), for the material buffer.
+vec2 bg_octEncode(vec3 n) {
+  n /= abs(n.x) + abs(n.y) + abs(n.z);
+  vec2 e = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+  return e * 0.5 + 0.5;
+}
+vec3 bg_octDecode(vec2 e) {
+  e = e * 2.0 - 1.0;
+  vec3 n = vec3(e, 1.0 - abs(e.x) - abs(e.y));
+  float t = max(-n.z, 0.0);
+  n.x += n.x >= 0.0 ? -t : t;
+  n.y += n.y >= 0.0 ? -t : t;
+  return normalize(n);
+}
 float bg_hash12(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -2208,6 +2262,23 @@ vec2 bg_faceUVOf(vec3 p, vec3 n) {
 // Helpers that use screen derivatives. They only compile in pixel (fragment)
 // shaders, so they are kept apart from the shared helpers above.
 export const GLSL_FRAG_HELPERS = `
+// Tangent-space normal (from a normal map) to world space, with a tangent
+// frame built from screen derivatives: x follows the texture's U, y its V
+// (down the image), so DirectX-style LabPBR maps come out the right way up.
+vec3 bg_cotangentNormal(vec3 tn, vec3 N, vec3 p, vec2 uv) {
+  vec3 dp1 = dFdx(p);
+  vec3 dp2 = dFdy(p);
+  vec2 du1 = dFdx(uv);
+  vec2 du2 = dFdy(uv);
+  vec3 dp2perp = cross(dp2, N);
+  vec3 dp1perp = cross(N, dp1);
+  vec3 T = dp2perp * du1.x + dp1perp * du2.x;
+  vec3 B = dp2perp * du1.y + dp1perp * du2.y;
+  float m = max(dot(T, T), dot(B, B));
+  if (m < 1.0e-30) return N;
+  float inv = inversesqrt(m);
+  return normalize(T * inv * tn.x + B * inv * tn.y + N * tn.z);
+}
 vec3 bg_bumpNormal(float h, float strength, vec3 n, vec3 p) {
   vec3 dpdx = dFdx(p);
   vec3 dpdy = dFdy(p);

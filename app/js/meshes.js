@@ -57,7 +57,9 @@ export function meshFromObj(text, mtl = {}) {
     if (!matIndex.has(name)) {
       const m = mtl[name];
       matIndex.set(name, materials.length);
-      materials.push({ name, color: m?.color || defaultColor(materials.length), image: -1, file: m?.map || null });
+      const mat = { name, color: m?.color || defaultColor(materials.length), image: -1, file: m?.map || null };
+      if (m?.pbr) mat.pbrFiles = m.pbr;
+      materials.push(mat);
     }
     current = matIndex.get(name);
   };
@@ -106,10 +108,16 @@ export function meshFromObj(text, mtl = {}) {
   return b.build(materials);
 }
 
-// Reads the materials of a .mtl file: base colour and colour texture name.
+// Reads the materials of a .mtl file: base colour and colour texture name,
+// plus the PBR lines Blender writes (normal map, roughness, metallic,
+// emission) as `pbr`, in the same shape as a glTF material's (see pbr.js).
 export function parseMtl(text) {
   const out = {};
   let cur = null;
+  const file = (p) => p[p.length - 1].replace(/\\/g, '/').split('/').pop();
+  const num = (v, d) => (Number.isFinite(+v) ? +v : d);
+  // Unlike glTF, an OBJ material is not metal unless it says so (Pm or map_Pm).
+  const pbr = () => (cur.pbr = cur.pbr || { metallic: 0, roughness: 1, hasMR: false, emissiveFactor: [0, 0, 0], normalScale: 1 });
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.replace(/#.*/, '').trim();
     if (!line) continue;
@@ -123,8 +131,31 @@ export function parseMtl(text) {
     } else if (k === 'kd') {
       cur.color = [+p[1], +p[2], +p[3]].map((v) => (Number.isFinite(v) ? v : 0.8));
     } else if (k === 'map_kd') {
-      cur.map = p[p.length - 1].replace(/\\/g, '/').split('/').pop();
+      cur.map = file(p);
+    } else if (k === 'map_bump' || k === 'bump' || k === 'norm' || k === 'map_norm') {
+      pbr().normal = file(p);
+      const bm = p.findIndex((x) => x.toLowerCase() === '-bm');
+      if (bm > 0) pbr().normalScale = num(p[bm + 1], 1);
+    } else if (k === 'pr') {
+      Object.assign(pbr(), { roughness: num(p[1], 1), hasMR: true });
+    } else if (k === 'pm') {
+      Object.assign(pbr(), { metallic: num(p[1], 0), hasMR: true, pmSet: true });
+    } else if (k === 'map_pr') {
+      Object.assign(pbr(), { rough: file(p), hasMR: true });
+    } else if (k === 'map_pm') {
+      Object.assign(pbr(), { metal: file(p), hasMR: true });
+      if (!cur.pbr.pmSet) cur.pbr.metallic = 1;
+    } else if (k === 'ke') {
+      pbr().emissiveFactor = [+p[1], +p[2], +p[3]].map((v) => num(v, 0));
+    } else if (k === 'map_ke') {
+      pbr().emissive = file(p);
     }
+  }
+  for (const m of Object.values(out)) {
+    if (!m.pbr) continue;
+    delete m.pbr.pmSet;
+    // map_Ke without Ke: the map alone sets the glow.
+    if (m.pbr.emissive && !m.pbr.emissiveFactor.some((v) => v > 0)) m.pbr.emissiveFactor = [1, 1, 1];
   }
   return out;
 }
@@ -284,16 +315,32 @@ export function meshFromGltf(gltf, buffers) {
     if (matFor.has(key)) return matFor.get(key);
     const g = i === undefined ? null : gltf.materials?.[i];
     const pbr = g?.pbrMetallicRoughness || {};
-    const tex = pbr.baseColorTexture ? gltf.textures?.[pbr.baseColorTexture.index] : null;
-    const src = tex?.source ?? tex?.extensions?.KHR_texture_basisu?.source ?? tex?.extensions?.EXT_texture_webp?.source;
+    const imageOf = (ref) => {
+      const tex = ref ? gltf.textures?.[ref.index] : null;
+      const src = tex?.source ?? tex?.extensions?.KHR_texture_basisu?.source ?? tex?.extensions?.EXT_texture_webp?.source;
+      return src !== undefined ? getImage(src) : -1;
+    };
     const f = pbr.baseColorFactor || [1, 1, 1, 1];
     const glow = (g?.emissiveFactor || [0, 0, 0]).some((v) => v > 0.5) && !g?.emissiveTexture;
-    materials.push({
+    const mat = {
       name: g?.name || (i === undefined ? 'default' : `material_${i}`),
       color: pbr.baseColorTexture ? [1, 1, 1] : srgbFromLinear(f.slice(0, 3)),
-      image: src !== undefined ? getImage(src) : -1,
+      image: imageOf(pbr.baseColorTexture),
       glow,
-    });
+    };
+    // Normal, metal/roughness, occlusion and emission: turned into the
+    // material maps shaders read (see pbr.js) when the model is imported.
+    const strength = g?.extensions?.KHR_materials_emissive_strength?.emissiveStrength ?? 1;
+    const info = {
+      normal: imageOf(g?.normalTexture), normalScale: g?.normalTexture?.scale ?? 1,
+      occlusion: imageOf(g?.occlusionTexture), occlusionStrength: g?.occlusionTexture?.strength ?? 1,
+      mr: imageOf(pbr.metallicRoughnessTexture),
+      metallic: pbr.metallicFactor ?? 1, roughness: pbr.roughnessFactor ?? 1,
+      hasMR: 'metallicFactor' in pbr || 'roughnessFactor' in pbr || !!pbr.metallicRoughnessTexture,
+      emissive: imageOf(g?.emissiveTexture), emissiveFactor: (g?.emissiveFactor || [0, 0, 0]).map((v) => v * strength),
+    };
+    if (info.normal >= 0 || info.occlusion >= 0 || info.hasMR || info.emissiveFactor.some((v) => v > 0)) mat.pbr = info;
+    materials.push(mat);
     matFor.set(key, materials.length - 1);
     return materials.length - 1;
   };
@@ -699,17 +746,23 @@ const b64 = {
   },
 };
 
+// Material maps (material.maps = { n, s }) are PNG bytes; JSON carries them as base64.
+const mapsToJSON = (maps) => (maps ? Object.fromEntries(Object.entries(maps).map(([k, v]) => [k, v ? b64.enc(v) : null])) : undefined);
+const mapsFromJSON = (maps) => (maps ? Object.fromEntries(Object.entries(maps).map(([k, v]) => [k, v ? b64.dec(v, Uint8Array) : null])) : undefined);
+
 // Plain JSON form of a mesh, for graph files.
 export function meshToJSON(mesh) {
   return {
     pos: b64.enc(mesh.pos), uv: mesh.uv ? b64.enc(mesh.uv) : null, nrm: mesh.nrm ? b64.enc(mesh.nrm) : null,
-    idx: b64.enc(mesh.idx), mat: b64.enc(mesh.mat), materials: mesh.materials,
+    idx: b64.enc(mesh.idx), mat: b64.enc(mesh.mat),
+    materials: mesh.materials.map(({ maps, ...m }) => (maps ? { ...m, maps: mapsToJSON(maps) } : m)),
   };
 }
 
 export function meshFromJSON(j) {
   return {
     pos: b64.dec(j.pos, Float32Array), uv: j.uv ? b64.dec(j.uv, Float32Array) : null, nrm: j.nrm ? b64.dec(j.nrm, Float32Array) : null,
-    idx: b64.dec(j.idx, Uint32Array), mat: b64.dec(j.mat, Uint16Array), materials: j.materials || [],
+    idx: b64.dec(j.idx, Uint32Array), mat: b64.dec(j.mat, Uint16Array),
+    materials: (j.materials || []).map(({ maps, ...m }) => (maps ? { ...m, maps: mapsFromJSON(maps) } : m)),
   };
 }

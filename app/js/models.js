@@ -6,6 +6,8 @@
 
 import * as M from './meshes.js';
 import * as TX from './textures.js';
+import * as PBR from './pbr.js';
+import { encodePng, decodePng } from './png.js';
 import { MODEL_TILES, MODEL_SPOT, atlasUV, sceneLight } from './preview.js';
 import { ModelView } from './modelview.js';
 
@@ -69,6 +71,8 @@ const meshes = new Map(); // mesh id -> mesh (immutable, so undo can point back 
 const norms = new Map();
 const quadCounts = new Map();
 const shownTiles = new Set();
+const shownPbr = new Map(); // preview tile -> what its material maps show
+const decodedMaps = new Map(); // "meshId:material" -> { n, s } pixels, or 'pending'
 
 // ------------------------------------------------------------- storage
 // Meshes are too big for localStorage, so they live in IndexedDB. The models
@@ -221,6 +225,76 @@ function solidImage(color, size = 16) {
   return img;
 }
 
+function resizeImage(img, w, h) {
+  const c = document.createElement('canvas');
+  c.width = img.width;
+  c.height = img.height;
+  c.getContext('2d').putImageData(img instanceof ImageData ? img : new ImageData(img.data, img.width, img.height), 0, 0);
+  const d = document.createElement('canvas');
+  d.width = w;
+  d.height = h;
+  const g = d.getContext('2d');
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(c, 0, 0, w, h);
+  return g.getImageData(0, 0, w, h);
+}
+
+// How shiny a material is with a Lit shader (see pbr.js SURFACES). Models
+// saved before material maps existed have no surface: maps if the file had
+// them, matte otherwise.
+export function surfaceOf(model, i) {
+  const mesh = meshes.get(model.mesh);
+  const s = model.mats[i]?.surface;
+  if (s === 'file') return mesh?.materials[i]?.maps ? 'file' : 'matte';
+  if (s && PBR.SURFACES[s]) return s;
+  return mesh?.materials[i]?.maps ? 'file' : 'matte';
+}
+
+// Normal and specular maps (LabPBR) for one material, from the model file:
+// PNG bytes made at import from its normal, metal/roughness and emission maps.
+// glowTint is the colour texture with glowing pixels tinted to their glow.
+async function buildMaps(info, albedo, getImage) {
+  const imgs = {};
+  for (const k of ['normal', 'occlusion', 'mr', 'rough', 'metal', 'emissive']) imgs[k] = await getImage(info[k]);
+  let w, h;
+  if (albedo) {
+    [w, h] = [albedo.width, albedo.height];
+  } else {
+    const sides = Object.values(imgs).filter(Boolean).map((im) => Math.max(im.width, im.height));
+    w = h = TX.snapSize(Math.max(16, ...sides));
+  }
+  const fit = (im) => (!im ? null : im.width === w && im.height === h ? im : resizeImage(im, w, h));
+  let normal = fit(imgs.normal);
+  if (normal && PBR.isGrayscale(normal)) normal = PBR.normalFromHeight(normal); // a bump map, not a normal map
+  const r = PBR.toLabPbr({
+    w, h, albedo, normal, normalScale: info.normalScale ?? 1,
+    occlusion: fit(imgs.occlusion), occlusionStrength: info.occlusionStrength ?? 1,
+    mr: fit(imgs.mr), rough: fit(imgs.rough), metal: fit(imgs.metal),
+    metallic: info.metallic ?? 1, roughness: info.roughness ?? 1, hasMR: !!info.hasMR,
+    emissive: fit(imgs.emissive), emissiveFactor: info.emissiveFactor || [0, 0, 0],
+  });
+  if (!r.n && !r.s) return null;
+  return {
+    n: r.n ? await encodePng(r.n, w, h) : null,
+    s: r.s ? await encodePng(r.s, w, h) : null,
+    glowTint: r.glowTint ? new ImageData(r.glowTint, w, h) : null,
+  };
+}
+
+const pngSize = (bytes) => {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  return [dv.getUint32(16), dv.getUint32(20)];
+};
+
+// A map's PNG at the colour texture's size (Iris lines maps up with it).
+async function mapAtSize(bytes, w, h, isNormal) {
+  const [mw, mh] = pngSize(bytes);
+  if (mw === w && mh === h) return bytes;
+  const img = await decodePng(bytes);
+  return encodePng(PBR.boxDownscale(img.data, img.width, img.height, w, h, isNormal), w, h);
+}
+
 function bytesToImage(bytes, mime) {
   return decodeImage(new Blob([bytes], { type: mime || 'image/png' }));
 }
@@ -267,7 +341,7 @@ function withPaletteUVs(mesh) {
 
 // --------------------------------------------------------------- create
 
-function addModel(mesh, { name, use = 'custom', target = '', base = 'minecraft:stick', hold = 'item', texFor = [], glowFor = [] }) {
+function addModel(mesh, { name, use = 'custom', target = '', base = 'minecraft:stick', hold = 'item', texFor = [], glowFor = [], surfaceFor = [] }) {
   const meshId = newMeshId();
   storeMesh(meshId, mesh);
   const model = {
@@ -280,7 +354,7 @@ function addModel(mesh, { name, use = 'custom', target = '', base = 'minecraft:s
     hold,
     facing: false,
     fit: { ...M.DEFAULT_FIT, r: [0, 0, 0], t: [0, 0, 0] },
-    mats: mesh.materials.map((m, i) => ({ name: m.name, tex: texFor[i] || '', glow: !!(glowFor[i] ?? m.glow) })),
+    mats: mesh.materials.map((m, i) => ({ name: m.name, tex: texFor[i] || '', glow: !!(glowFor[i] ?? m.glow), surface: surfaceFor[i] || (m.maps ? 'file' : 'matte') })),
   };
   model.fit = poseFit(model, mesh);
   ctx.state.models.push(model);
@@ -306,7 +380,7 @@ export function addSample(kind) {
   if (kind === 'crystal') {
     const s = M.sampleCrystal();
     const tex = addSampleTextures(s.textures, 'Crystal');
-    addModel(s.mesh, { name: 'Crystal', use: 'block', target: 'minecraft:flower_pot', hold: 'block', texFor: [tex[0], tex[0]] });
+    addModel(s.mesh, { name: 'Crystal', use: 'block', target: 'minecraft:flower_pot', hold: 'block', texFor: [tex[0], tex[0]], surfaceFor: ['gem', 'gem'] });
   } else {
     const s = M.sampleSword();
     const tex = addSampleTextures(s.textures, 'Sword');
@@ -365,7 +439,7 @@ export async function importFiles(fileList, defaults = {}) {
   // Textures: one per image, shared by the materials using it.
   const texOfImage = new Map();
   const texFor = [];
-  let missing = 0;
+  let missing = 0, missingMaps = 0, withMaps = 0;
   const noUv = !mesh.uv;
   if (noUv) {
     const p = withPaletteUVs(mesh);
@@ -373,20 +447,55 @@ export async function importFiles(fileList, defaults = {}) {
     const t = TX.addImageTexture(p.palette, `${name} colours`);
     mesh.materials.forEach((_, i) => { texFor[i] = t.id; });
   } else {
+    // Images by glTF index or OBJ file name, each decoded once.
+    const decoded = new Map();
+    const getImage = async (ref) => {
+      if (ref === undefined || ref === null || ref === -1) return null;
+      if (!decoded.has(ref)) {
+        const f = typeof ref === 'string' ? find(ref) : null;
+        const src = typeof ref === 'number' ? imageSources[ref] : f ? () => decodeImage(f) : null;
+        let img = null;
+        try {
+          img = src ? await src() : null;
+        } catch { /* unreadable: treated as missing */ }
+        if (!img) missingMaps++;
+        decoded.set(ref, img);
+      }
+      return decoded.get(ref);
+    };
     for (const [i, m] of mesh.materials.entries()) {
-      let t = null;
+      const info = m.pbr || m.pbrFiles || null;
+      delete m.pbr;
+      delete m.pbrFiles;
+      let albedo = null;
       if (m.image >= 0 && imageSources[m.image]) {
-        if (!texOfImage.has(m.image)) {
-          try {
-            const img = await imageSources[m.image]();
-            texOfImage.set(m.image, TX.addImageTexture(img, `${name} ${m.name}`.slice(0, 40)).id);
-          } catch {
-            texOfImage.set(m.image, null);
-          }
-        }
-        t = texOfImage.get(m.image);
+        try {
+          albedo = await imageSources[m.image]();
+        } catch { /* falls back to a plain colour */ }
       } else if (m.image >= 0 || m.file) {
         missing++;
+      }
+      if (albedo) albedo = TX.fitToSize(albedo);
+      // Normal, roughness, metal and glow become maps for shaders. A glowing
+      // material gets its own copy of the colour texture, tinted to the glow.
+      let tint = null;
+      if (info) {
+        try {
+          const maps = await buildMaps(info, albedo, getImage);
+          if (maps) {
+            m.maps = { n: maps.n, s: maps.s };
+            tint = maps.glowTint;
+            withMaps++;
+          }
+        } catch (err) {
+          console.warn(`Material maps for ${m.name}:`, err);
+        }
+      }
+      let t = null;
+      if (albedo) {
+        const key = tint ? `glow:${i}` : m.image;
+        if (!texOfImage.has(key)) texOfImage.set(key, TX.addImageTexture(tint || albedo, `${name} ${m.name}`.slice(0, 40)).id);
+        t = texOfImage.get(key);
       }
       if (!t) t = TX.addImageTexture(solidImage(m.color || [0.8, 0.8, 0.8]), `${name} ${m.name}`.slice(0, 40)).id;
       texFor[i] = t;
@@ -398,6 +507,8 @@ export async function importFiles(fileList, defaults = {}) {
   let msg = `Imported “${model.name}”: ${tris} triangles, ${mesh.materials.length} material${mesh.materials.length === 1 ? '' : 's'}.`;
   if (missing) msg += ` ${missing} texture file${missing === 1 ? ' was' : 's were'} not picked, so plain colours stand in. Pick the images with the model, or paint them in Textures.`;
   if (noUv) msg += ' It had no UVs, so each material got a flat colour.';
+  if (withMaps) msg += ` ${withMaps} material${withMaps === 1 ? ' has' : 's have'} normal and shine maps for Lit shaders (Material Maps node).`;
+  if (missingMaps) msg += ` ${missingMaps} normal, roughness, metal or glow map${missingMaps === 1 ? ' was' : 's were'} not picked, so ${missingMaps === 1 ? 'it was' : 'they were'} left out.`;
   ctx.toast(msg);
   return model;
 }
@@ -469,6 +580,7 @@ function updatePreview() {
     preview.setHeldModel?.(null);
     for (const t of shownTiles) preview.setTileOverride(t, null);
     shownTiles.clear();
+    showTileMaps(new Map());
     return;
   }
   const mats = materialViews(m);
@@ -492,6 +604,13 @@ function updatePreview() {
   for (const t of shownTiles) if (!used.has(t)) preview.setTileOverride(t, null);
   shownTiles.clear();
   for (const t of used) shownTiles.add(t);
+  // Material maps on the same tiles, for the Material Maps node.
+  const mapsOfTile = new Map();
+  m.mats.forEach((x, i) => {
+    const tile = mats[i].img ? tileOfTex.get(x.tex) : whiteTile;
+    if (tile >= 0 && !mapsOfTile.has(tile)) mapsOfTile.set(tile, previewMaps(m, i));
+  });
+  showTileMaps(mapsOfTile);
 
   const held = m.use !== 'block' && !!preview.setHeldModel;
   const at = held ? [-0.5, -0.5, -0.5] : MODEL_SPOT;
@@ -535,6 +654,42 @@ function updatePreview() {
     preview.setHeldModel?.(null);
     preview.setModel(data);
   }
+}
+
+// The maps one material shows in the preview: { key, n, s } with pixels, or
+// null while a model file's maps are still being decoded.
+function previewMaps(m, i) {
+  const surface = surfaceOf(m, i);
+  const glow = !!m.mats[i].glow;
+  if (surface === 'file') {
+    const id = `${m.mesh}:${i}`;
+    const got = decodedMaps.get(id);
+    if (got && got !== 'pending') return { key: `${id}:file`, ...got };
+    if (!got) {
+      decodedMaps.set(id, 'pending');
+      const maps = meshes.get(m.mesh)?.materials[i]?.maps || {};
+      Promise.all([maps.n ? decodePng(maps.n) : null, maps.s ? decodePng(maps.s) : null])
+        .then(([n, s]) => decodedMaps.set(id, { n, s }))
+        .catch(() => decodedMaps.set(id, { n: null, s: null }))
+        .then(() => updatePreview());
+    }
+    return { key: 'flat', n: null, s: null };
+  }
+  const px = PBR.flatSpecular(surface, glow);
+  return { key: `${surface}:${glow}`, n: null, s: px ? { data: PBR.solidMap(px, 4, 4), width: 4, height: 4 } : null };
+}
+
+function showTileMaps(mapsOfTile) {
+  const preview = ctx.preview;
+  for (const [tile, key] of shownPbr) {
+    if (!mapsOfTile.has(tile) && key !== 'flat') preview.setTilePbr?.(tile, null, null);
+  }
+  for (const [tile, maps] of mapsOfTile) {
+    if (shownPbr.get(tile) === maps.key) continue;
+    preview.setTilePbr?.(tile, maps.n, maps.s);
+  }
+  shownPbr.clear();
+  for (const [tile, maps] of mapsOfTile) shownPbr.set(tile, maps.key);
 }
 
 export function refreshViews() {
@@ -922,6 +1077,18 @@ function renderProps() {
         commit(true);
       });
       body.append(sel);
+      const surf = el('select', 'in-select');
+      surf.setAttribute('aria-label', `Surface of ${mat.name}`);
+      surf.title = 'How it shines with Lit lighting in your shader: normal map, smoothness, metal and glow (written as LabPBR _n and _s textures)';
+      for (const [k, v] of Object.entries(PBR.SURFACES)) {
+        if (k === 'file' && !mesh.materials[i]?.maps) continue;
+        const o = el('option', null, k === 'file' ? `Surface: ${v.label} (normal + shine maps)` : `Surface: ${v.label}`);
+        o.value = k;
+        surf.append(o);
+      }
+      surf.value = surfaceOf(m, i);
+      surf.addEventListener('change', () => { mat.surface = surf.value; commit(); });
+      body.append(surf);
       const side = el('div', 'mat-side');
       const sw = el('label', 'ctl-switch small');
       const cb = el('input');
@@ -943,7 +1110,7 @@ function renderProps() {
       row.addEventListener('pointerleave', () => view?.setHighlight(-1));
       mats.append(row);
     });
-    box.append(field(`Materials (${m.mats.length})`, mats, 'Textures come from the Textures tab, so you can paint them there. They go into the resource pack with the model.'));
+    box.append(field(`Materials (${m.mats.length})`, mats, 'Textures come from the Textures tab, so you can paint them there. They go into the resource pack with the model. Surface sets how shiny each part is under a Lit shader (the Realistic preset reads it through Material Maps).'));
 
     const quads = quadCount(m.mesh);
     const stats = el('p', 'field-hint');
@@ -1032,6 +1199,7 @@ export async function modelPackFiles(ns) {
   const keys = modelKeys();
   const texKeys = new Map();
   const usedTexKeys = new Set();
+  const mapsWritten = new Set();
   const itemDefs = new Map(); // item id -> model, to spot two models on one item
   const blockDefs = new Map();
   for (const m of ctx.state.models) {
@@ -1063,7 +1231,22 @@ export async function modelPackFiles(ns) {
         texKeys.set(mat.tex, k);
         files[`assets/${ns}/textures/block/${k}.png`] = await TX.imageDataToPng(img);
       }
-      textures[slots[i]] = `${ns}:block/${texKeys.get(mat.tex)}`;
+      const k = texKeys.get(mat.tex);
+      textures[slots[i]] = `${ns}:block/${k}`;
+      // Material maps go next to the texture as k_n.png and k_s.png (LabPBR),
+      // where Iris finds them. A texture shared by two materials gets the first one's.
+      if (!mapsWritten.has(k)) {
+        mapsWritten.add(k);
+        const surface = surfaceOf(m, i);
+        const maps = surface === 'file' ? mesh.materials[i]?.maps : null;
+        if (maps) {
+          if (maps.n) files[`assets/${ns}/textures/block/${k}_n.png`] = await mapAtSize(maps.n, img.width, img.height, true);
+          if (maps.s) files[`assets/${ns}/textures/block/${k}_s.png`] = await mapAtSize(maps.s, img.width, img.height, false);
+        } else {
+          const px = PBR.flatSpecular(surface, mat.glow);
+          if (px) files[`assets/${ns}/textures/block/${k}_s.png`] = await encodePng(PBR.solidMap(px, img.width, img.height), img.width, img.height);
+        }
+      }
     }
     textures.particle = textures[slots[0]] || 'minecraft:block/white_concrete';
     const obj = M.meshToObj(mesh, matrixOf(m), slots, m.name);

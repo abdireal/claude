@@ -310,6 +310,7 @@ const SHADOW_DISTORT = `vec3 bg_distortShadow(vec3 p) {
 function irisShadowOptions(sh) {
   const f2 = (x) => x.toFixed(2);
   return [
+    '#define BG_REFLECTIONS // Smooth Lit surfaces reflect what is on screen',
     `${sh.on ? '' : '//'}#define BG_SHADOWS // Sun shadows from a shadow map`,
     `#define BG_SHADOW_STRENGTH ${f2(sh.strength)} // [${SHADOW_CHOICES.strength.map(f2).join(' ')}]`,
     `#define BG_SHADOW_SOFTNESS ${f2(sh.softness)} // [${SHADOW_CHOICES.softness.map(f2).join(' ')}]`,
@@ -367,31 +368,39 @@ function surfaceToColor(o, params, target, opts = {}) {
   ];
   if (lit) {
     lines.push(
-      '// Lit: sun shading and a Blinn-Phong highlight driven by Normal, Smoothness and Metallic.',
+      '// Lit: sun shading, a sun highlight and reflections driven by Normal, Smoothness and Metallic.',
       `vec3 bg_N = normalize(${o.normal});`,
       `float bg_sm = clamp(${o.smooth}, 0.0, 1.0);`,
       `float bg_mt = clamp(${o.metal}, 0.0, 1.0);`,
       'float bg_ndl = dot(bg_N, bg_sunDir);',
       '// Shadows block the direct sun; the sky dome (0.55) still fills them.',
       'float bg_direct = max(bg_ndl, 0.0) * mix(1.0, bg_shade, bg_shadowStrength);',
-      'rgb *= mix(1.0, 0.55 + 0.67 * bg_direct, bg_sunVis) * (1.0 - 0.6 * bg_mt);',
+      '// Metal has almost no diffuse light of its own: its colour is what it reflects.',
+      'rgb *= mix(1.0, 0.55 + 0.67 * bg_direct, bg_sunVis) * (1.0 - 0.65 * bg_mt);',
       'vec3 bg_H = normalize(bg_sunDir + bg_viewDir);',
       'float bg_exp = mix(6.0, 600.0, bg_sm * bg_sm);',
       'vec3 bg_F0 = mix(vec3(0.04), bg_col, bg_mt);',
       'vec3 bg_F = bg_F0 + (1.0 - bg_F0) * pow(1.0 - max(dot(bg_N, bg_viewDir), 0.0), 5.0);',
       'float bg_spec = pow(max(dot(bg_N, bg_H), 0.0), bg_exp) * (bg_exp + 8.0) / 25.13 * step(0.0, bg_ndl);',
       'rgb += bg_F * bg_spec * bg_sm * bg_sunVis * mix(1.0, bg_shade, bg_shadowStrength) * vec3(1.0, 0.95, 0.85);',
-      '// Cheap sky reflection for metals: the sky colour above, the fog colour at the horizon.',
+      '// Reflections: the sky above, dark ground below (blurrier when rough), and the',
+      '// warm glow of torches nearby. Smooth surfaces reflect more; metal always does.',
       'vec3 bg_R = reflect(-bg_viewDir, bg_N);',
       'float bg_skyVis = bg_lm.y * bg_lm.y * (0.3 + 0.7 * bg_daylight);',
-      'vec3 bg_env = mix(bg_fogColor, bg_skyColor, smoothstep(-0.15, 0.55, bg_R.y)) * mix(0.35, 1.0, step(0.0, bg_R.y));',
-      'rgb += bg_F * bg_env * bg_skyVis * bg_mt * (0.25 + 0.75 * bg_sm);',
+      'vec3 bg_reflW = bg_F * mix(bg_sm * bg_sm, 0.25 + 0.75 * bg_sm, bg_mt);',
+      'vec3 bg_reflEnv = bg_reflW * (bg_envColor(bg_R, 1.0 - bg_sm, bg_skyColor, bg_fogColor) * bg_skyVis + vec3(1.0, 0.8, 0.55) * bg_lm.x * bg_lm.x * 0.5);',
+      'rgb += bg_reflEnv;',
     );
   }
   if (!lit) {
     lines.push(
       '// Vanilla: sun shadows darken the skylight, never torchlight, and never to black.',
       'rgb *= 1.0 - 0.8 * bg_shadowStrength * (1.0 - bg_shade) * bg_sunVis;',
+      '// Nothing to reflect (Lighting is Vanilla).',
+      'vec3 bg_N = bg_normal;',
+      'float bg_sm = 0.0;',
+      'vec3 bg_reflW = vec3(0.0);',
+      'vec3 bg_reflEnv = vec3(0.0);',
     );
   }
   lines.push('rgb += bg_col * bg_emit;');
@@ -402,6 +411,40 @@ function surfaceToColor(o, params, target, opts = {}) {
   }
   return lines;
 }
+
+// Material maps (LabPBR _n and _s, see the Material Maps node). The preview
+// keeps two atlases next to its colour atlas; Iris binds "normals" and
+// "specular" for whatever texture is being drawn and gives a tangent per vertex.
+const PREVIEW_MAPS = `uniform sampler2D u_normalAtlas;
+uniform sampler2D u_specAtlas;
+vec4 bg_normalMapAt(vec2 uv) { return texture(u_normalAtlas, uv); }
+vec4 bg_specularMapAt(vec2 uv) { return texture(u_specAtlas, uv); }
+vec3 bg_applyNormalMap(vec3 tn, vec3 N, vec3 p, vec2 uv) { return bg_cotangentNormal(tn, N, p, uv); }`;
+
+const IRIS_MAPS = `uniform sampler2D normals;
+uniform sampler2D specular;
+vec4 bg_normalMapAt(vec2 uv) { return texture(normals, uv); }
+vec4 bg_specularMapAt(vec2 uv) { return texture(specular, uv); }
+// LabPBR maps are DirectX style: y runs along cross(tangent, normal) * w, as in other Iris packs.
+vec3 bg_applyNormalMap(vec3 tn, vec3 N, vec3 p, vec2 uv) {
+  vec3 T = worldTangent.xyz - N * dot(N, worldTangent.xyz);
+  if (abs(worldTangent.w) < 0.5 || dot(T, T) < 1.0e-6) return N; // no tangent given
+  T = normalize(T);
+  vec3 B = cross(T, N) * (worldTangent.w < 0.0 ? -1.0 : 1.0);
+  return normalize(T * tn.x + B * tn.y + N * tn.z);
+}`;
+
+// Iris: a smooth Lit surface writes what it reflects into the material buffers
+// (colortex1-3), so the Reflections pass can swap the sky for what is on screen.
+const IRIS_MATERIAL_TARGETS = `/* RENDERTARGETS: 0,1,2,3 */
+layout(location = 0) out vec4 outColor0;
+layout(location = 1) out vec4 outColor1;
+layout(location = 2) out vec4 outColor2;
+layout(location = 3) out vec4 outColor3;`;
+
+const IRIS_MATERIAL_WRITES = `	outColor1 = vec4(bg_octEncode(bg_N), bg_sm, 1.0);
+	outColor2 = vec4(clamp(bg_reflW * bg_alpha, 0.0, 1.0), 1.0);
+	outColor3 = vec4(clamp(bg_reflEnv * bg_alpha, 0.0, 1.0), 1.0);`;
 
 // ------------------------------------------------------------------ preview
 
@@ -496,6 +539,7 @@ ${GLSL_HELPERS}
 ${GLSL_FRAG_HELPERS}
 ${PREVIEW_LIGHT}
 ${PREVIEW_SHADOW_LOOKUP}
+${PREVIEW_MAPS}
 vec4 bg_sampleBlock(vec2 uv) { return texture(u_atlas, uv); }
 vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(u_atlas, uv, lod); }
 ${fFns}
@@ -599,6 +643,7 @@ ${GLSL_HELPERS}
 ${GLSL_FRAG_HELPERS}
 ${PREVIEW_LIGHT}
 ${PREVIEW_SHADOW_LOOKUP}
+${PREVIEW_MAPS}
 vec4 bg_sampleBlock(vec2 uv) { return texture(u_atlas, uv); }
 vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(u_atlas, uv, lod); }
 ${c.eFrag.functions.join('\n')}
@@ -661,6 +706,7 @@ out vec4 fragColor;
 ${GLSL_HELPERS}
 ${GLSL_FRAG_HELPERS}
 ${PREVIEW_LIGHT}
+${PREVIEW_MAPS}
 vec4 bg_sampleBlock(vec2 uv) { return texture(u_atlas, uv); }
 vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(u_atlas, uv, lod); }
 vec4 bg_sampleScene(vec2 uv) { return texture(u_scene, uv); }
@@ -824,12 +870,14 @@ uniform sampler2D lightmap;
 
 in vec4 mc_Entity;
 in vec2 mc_midTexCoord;
+in vec4 at_tangent;
 
 out vec2 texcoord;
 out vec2 lmcoord;
 out vec4 glcolor;
 out vec3 worldPos;
 out vec3 worldNormal;
+out vec4 worldTangent;
 out float viewDist;
 out float plantTop;
 flat out int blockId;
@@ -849,6 +897,7 @@ void main() {
 	vec4 playerPos = gbufferModelViewInverse * (gl_ModelViewMatrix * gl_Vertex);
 	vec3 wPos = playerPos.xyz + cameraPosition;
 	vec3 wNormal = normalize(mat3(gbufferModelViewInverse) * normalize(gl_NormalMatrix * gl_Normal));
+	worldTangent = vec4(bg_safeNormalize(mat3(gbufferModelViewInverse) * (gl_NormalMatrix * at_tangent.xyz)), at_tangent.w);
 
 ${indent([terrainBuiltins('iris', 'vertex')])}
 
@@ -877,15 +926,16 @@ in vec2 lmcoord;
 in vec4 glcolor;
 in vec3 worldPos;
 in vec3 worldNormal;
+in vec4 worldTangent;
 in float viewDist;
 in float plantTop;
 flat in int blockId;
 
-/* RENDERTARGETS: 0 */
-layout(location = 0) out vec4 outColor0;
+${IRIS_MATERIAL_TARGETS}
 ${GLSL_HELPERS}
 ${GLSL_FRAG_HELPERS}
 ${IRIS_SHADOW_LOOKUP}
+${IRIS_MAPS}
 vec4 bg_sampleBlock(vec2 uv) { return texture(gtexture, uv); }
 vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(gtexture, uv, lod); }
 ${c.tFrag.functions.join('\n')}
@@ -895,6 +945,7 @@ ${indent([terrainBuiltins('iris', 'fragment')])}
 ${indent(c.tFrag.lines.length ? c.tFrag.lines : ['// (no nodes)'])}
 ${indent(surfaceToColor(o, c.tFrag.outParams, 'iris'))}
 	outColor0 = vec4(rgb, bg_alpha);
+${IRIS_MATERIAL_WRITES}
 }
 `;
   return { vsh, fsh };
@@ -985,11 +1036,14 @@ uniform int entityId;
 uniform int blockEntityId;
 uniform int currentRenderedItemId;
 
+in vec4 at_tangent;
+
 out vec2 texcoord;
 out vec2 lmcoord;
 out vec4 glcolor;
 out vec3 worldPos;
 out vec3 worldNormal;
+out vec4 worldTangent;
 out float viewDist;
 ${GLSL_HELPERS}
 vec4 bg_sampleBlock(vec2 uv) { return textureLod(gtexture, uv, 0.0); }
@@ -1003,6 +1057,7 @@ void main() {
 	vec4 playerPos = gbufferModelViewInverse * (gl_ModelViewMatrix * gl_Vertex);
 	vec3 wPos = playerPos.xyz + cameraPosition;
 	vec3 wNormal = bg_safeNormalize(mat3(gbufferModelViewInverse) * (gl_NormalMatrix * gl_Normal));
+	worldTangent = vec4(bg_safeNormalize(mat3(gbufferModelViewInverse) * (gl_NormalMatrix * at_tangent.xyz)), at_tangent.w);
 
 ${indent([entityBuiltins('iris', 'vertex', prog)])}
 
@@ -1033,13 +1088,14 @@ in vec2 lmcoord;
 in vec4 glcolor;
 in vec3 worldPos;
 in vec3 worldNormal;
+in vec4 worldTangent;
 in float viewDist;
 
-/* RENDERTARGETS: 0 */
-layout(location = 0) out vec4 outColor0;
+${IRIS_MATERIAL_TARGETS}
 ${GLSL_HELPERS}
 ${GLSL_FRAG_HELPERS}
 ${IRIS_SHADOW_LOOKUP}
+${IRIS_MAPS}
 vec4 bg_sampleBlock(vec2 uv) { return texture(gtexture, uv); }
 vec4 bg_sampleBlockLod(vec2 uv, float lod) { return textureLod(gtexture, uv, lod); }
 ${c.eFrag.functions.join('\n')}
@@ -1049,12 +1105,13 @@ ${indent([entityBuiltins('iris', 'fragment', prog)])}
 ${indent(c.eFrag.lines.length ? c.eFrag.lines : ['// (no nodes)'])}
 ${indent(surfaceToColor(o, c.eFrag.outParams, 'iris', { flash: 'entityColor' }))}
 	outColor0 = vec4(rgb, bg_alpha);
+${IRIS_MATERIAL_WRITES}
 }
 `;
   return { vsh, fsh };
 }
 
-// Iris reads these constants from any program; composite always exists.
+// Iris reads these constants from any program; composite1 (Post FX) always runs.
 function irisShadowConsts(sh) {
   const f1 = (x) => x.toFixed(1);
   return [
@@ -1064,9 +1121,19 @@ function irisShadowConsts(sh) {
   ].join('\n');
 }
 
-function irisComposite(c, sh) {
-  const set = settingsUsedIn(c.post, c.settings);
-  const vsh = `${HEADER('composite.vsh: full-screen pass for the Post FX graph')}
+// Formats of the material buffers the Lit outputs write (see IRIS_MATERIAL_TARGETS).
+const IRIS_BUFFER_FORMATS = `/*
+const int colortex1Format = RGBA16;
+const int colortex2Format = RGBA8;
+const int colortex3Format = RGBA8;
+const vec4 colortex1ClearColor = vec4(0.0, 0.0, 0.0, 0.0);
+const vec4 colortex2ClearColor = vec4(0.0, 0.0, 0.0, 0.0);
+const vec4 colortex3ClearColor = vec4(0.0, 0.0, 0.0, 0.0);
+*/`;
+
+export const REFLECTION_STEPS = [12, 16, 24, 32, 48];
+
+const FULLSCREEN_VSH = (what) => `${HEADER(what)}
 out vec2 texcoord;
 
 void main() {
@@ -1074,9 +1141,119 @@ void main() {
 	texcoord = (gl_TextureMatrix[0] * gl_MultiTexCoord0).xy;
 }
 `;
-  const fsh = `${HEADER('composite.fsh: Post FX graph')}
+
+// composite: screen-space reflections. Every Lit pixel stored how much it
+// reflects (colortex2) and the sky it reflected (colortex3). Here its
+// reflection ray is marched across the depth buffer; where it lands on
+// something on screen, that replaces the sky. Rays from the held item ignore
+// the hand (depthtex2) so a sword never reflects itself.
+function irisReflections() {
+  const vsh = FULLSCREEN_VSH('composite.vsh: Reflections pass');
+  const fsh = `${HEADER('composite.fsh: Reflections. Smooth Lit surfaces reflect what is on screen instead of just the sky.')}
+#define BG_REFLECTION_STEPS 24 // [${REFLECTION_STEPS.join(' ')}]
+#ifndef MC_HAND_DEPTH
+#define MC_HAND_DEPTH 0.125
+#endif
+
+uniform sampler2D colortex0;
+uniform sampler2D colortex1;
+uniform sampler2D colortex2;
+uniform sampler2D colortex3;
+uniform sampler2D depthtex0;
+uniform sampler2D depthtex2;
+uniform mat4 gbufferProjection;
+uniform mat4 gbufferProjectionInverse;
+uniform mat4 gbufferModelView;
+
+in vec2 texcoord;
+
+/* RENDERTARGETS: 0 */
+layout(location = 0) out vec4 outColor0;
+${GLSL_HELPERS}
+
+vec3 bg_viewPos(vec2 uv, float d) {
+	vec4 v = gbufferProjectionInverse * vec4(vec3(uv, d) * 2.0 - 1.0, 1.0);
+	return v.xyz / v.w;
+}
+vec3 bg_toScreen(vec3 p) {
+	vec4 c = gbufferProjection * vec4(p, 1.0);
+	return c.xyz / c.w * 0.5 + 0.5;
+}
+// The hand is drawn squeezed into the front of the depth range.
+float bg_unsqueezeHand(float d) {
+	return d < 0.56 ? 0.5 + (d - 0.5) / MC_HAND_DEPTH : d;
+}
+// View-space depth of the world (no hand) under a screen point, or 0 for sky.
+float bg_sceneZ(vec2 uv) {
+	float d = texture(depthtex2, uv).r;
+	return d >= 1.0 ? 0.0 : bg_viewPos(uv, d).z;
+}
+
+// Marches from p along r. Returns the screen point it hits, w = 1 on a hit.
+vec3 bg_trace(vec3 p, vec3 r, float jitter) {
+	float stepLen = 0.03 + 0.03 * -p.z;
+	vec3 prev = p;
+	vec3 pos = p + r * stepLen * jitter;
+	for (int i = 0; i < BG_REFLECTION_STEPS; i++) {
+		prev = pos;
+		pos += r * stepLen;
+		stepLen *= 1.32;
+		if (pos.z > -0.05) break;
+		vec3 s = bg_toScreen(pos);
+		if (s.x < 0.0 || s.x > 1.0 || s.y < 0.0 || s.y > 1.0) break;
+		float z = bg_sceneZ(s.xy);
+		if (z == 0.0) continue;
+		float behind = z - pos.z;
+		if (behind > 0.0 && behind < max(stepLen * 1.5, 0.4)) {
+			vec3 a = prev, b = pos;
+			for (int k = 0; k < 5; k++) {
+				vec3 mid = (a + b) * 0.5;
+				float mz = bg_sceneZ(bg_toScreen(mid).xy);
+				if (mz != 0.0 && mz - mid.z > 0.0) b = mid;
+				else a = mid;
+			}
+			return vec3(bg_toScreen(b).xy, 1.0);
+		}
+	}
+	return vec3(0.0);
+}
+
+void main() {
+	vec4 col = texture(colortex0, texcoord);
+	outColor0 = col;
+	vec3 w = texture(colortex2, texcoord).rgb;
+	vec4 m = texture(colortex1, texcoord);
+	// Only smooth surfaces get screen reflections; rough ones keep the blurry sky.
+	float smoothFade = smoothstep(0.45, 0.75, m.b);
+	if (max(w.r, max(w.g, w.b)) < 0.004 || smoothFade <= 0.0 || m.a < 0.5) return;
+
+	float d = bg_unsqueezeHand(texture(depthtex0, texcoord).r);
+	vec3 p = bg_viewPos(texcoord, d);
+	vec3 n = normalize(mat3(gbufferModelView) * bg_octDecode(m.rg));
+	vec3 v = normalize(p);
+	vec3 r = reflect(v, n);
+	float jitter = fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715))));
+	vec3 hit = bg_trace(p + n * (0.002 + 0.002 * -p.z), r, jitter);
+	if (hit.z < 0.5) return;
+
+	vec2 e = smoothstep(vec2(0.0), vec2(0.07), hit.xy) * smoothstep(vec2(0.0), vec2(0.07), 1.0 - hit.xy);
+	float fade = e.x * e.y * smoothFade;
+	vec3 seen = texture(colortex0, hit.xy).rgb;
+	vec3 sky = texture(colortex3, texcoord).rgb;
+	outColor0.rgb = clamp(col.rgb + fade * (w * seen - sky), 0.0, 1.0);
+}
+`;
+  return { vsh, fsh };
+}
+
+// composite1: the Post FX graph.
+function irisComposite(c, sh) {
+  const set = settingsUsedIn(c.post, c.settings);
+  const vsh = FULLSCREEN_VSH('composite1.vsh: full-screen pass for the Post FX graph');
+  const fsh = `${HEADER('composite1.fsh: Post FX graph')}
 ${irisSettingDefines(set)}
 ${irisShadowConsts(sh)}
+${IRIS_BUFFER_FORMATS}
 
 ${IRIS_COMMON_UNIFORMS}
 uniform sampler2D colortex0;
@@ -1301,14 +1478,17 @@ export function buildIris(graphs, opts = {}) {
   const terrain = irisTerrain(c, 'gbuffers_terrain', sh);
   const water = irisTerrain(c, 'gbuffers_water', sh);
   const comp = irisComposite(c, sh);
+  const refl = irisReflections();
   const shadow = irisShadow(c);
   const files = {};
   files['shaders/gbuffers_terrain.vsh'] = terrain.vsh;
   files['shaders/gbuffers_terrain.fsh'] = terrain.fsh;
   files['shaders/gbuffers_water.vsh'] = water.vsh;
   files['shaders/gbuffers_water.fsh'] = water.fsh;
-  files['shaders/composite.vsh'] = comp.vsh;
-  files['shaders/composite.fsh'] = comp.fsh;
+  files['shaders/composite.vsh'] = refl.vsh;
+  files['shaders/composite.fsh'] = refl.fsh;
+  files['shaders/composite1.vsh'] = comp.vsh;
+  files['shaders/composite1.fsh'] = comp.fsh;
   files['shaders/shadow.vsh'] = shadow.vsh;
   files['shaders/shadow.fsh'] = shadow.fsh;
   for (const [name, prog] of [
@@ -1356,6 +1536,8 @@ export function buildIris(graphs, opts = {}) {
   const names = [...c.settings.keys()];
   const sliders = names.filter((n) => c.settings.get(n).kind === 'slider');
   const shadowOpts = ['BG_SHADOWS', 'BG_SHADOW_STRENGTH', 'BG_SHADOW_SOFTNESS', 'shadowMapResolution', 'shadowDistance', 'sunPathRotation'];
+  const reflOpts = ['BG_REFLECTIONS', 'BG_REFLECTION_STEPS'];
+  const translucent = ['gbuffers_water', 'gbuffers_hand_water', 'gbuffers_entities_translucent', 'gbuffers_block_translucent'];
   const props = [
     `# ${opts.name || 'BlockGraph pack'}, made with BlockGraph.`,
     '# Keep vanilla per-face shading so blocks read as 3D.',
@@ -1366,6 +1548,11 @@ export function buildIris(graphs, opts = {}) {
     'shadowTerrain = true',
     'shadowEntities = true',
     'shadowBlockEntities = true',
+    '',
+    '# Reflections (composite). Lit surfaces write their normal, smoothness and',
+    '# reflection into colortex1-3; see-through ones replace what is behind them.',
+    'program.composite.enabled = BG_REFLECTIONS',
+    ...translucent.flatMap((p) => [1, 2, 3].map((i) => `blend.${p}.colortex${i} = off`)),
   ];
   if (opts.customTextures?.length) {
     props.push('', '# Textures from the Textures tab, used by Image Texture nodes.');
@@ -1373,9 +1560,10 @@ export function buildIris(graphs, opts = {}) {
   }
   props.push('', '# Settings menu (Iris → Shader Settings). Built from your Slider, On/Off and Dropdown nodes,');
   props.push('# plus a Shadows page.');
-  props.push(`screen = [SHADOWS]${names.length ? ' ' + names.join(' ') : ''}`);
+  props.push(`screen = [SHADOWS] [REFLECTIONS]${names.length ? ' ' + names.join(' ') : ''}`);
   props.push(`screen.SHADOWS = ${shadowOpts.join(' ')}`);
-  props.push(`sliders = ${[...sliders, ...shadowOpts.slice(1)].join(' ')}`);
+  props.push(`screen.REFLECTIONS = ${reflOpts.join(' ')}`);
+  props.push(`sliders = ${[...sliders, ...shadowOpts.slice(1), 'BG_REFLECTION_STEPS'].join(' ')}`);
   files['shaders/shaders.properties'] = props.join('\n') + '\n';
 
   const lang = [
@@ -1394,6 +1582,12 @@ export function buildIris(graphs, opts = {}) {
     'option.shadowDistance.comment=How far from you shadows are drawn, in blocks.',
     'option.sunPathRotation=Sun Angle',
     'option.sunPathRotation.comment=Tilts the path of the sun and moon so shadows fall to one side at noon.',
+    'screen.REFLECTIONS=Reflections',
+    'screen.REFLECTIONS.comment=Smooth surfaces (Lit lighting) mirror what is on screen. Made with BlockGraph.',
+    'option.BG_REFLECTIONS=Screen Reflections',
+    'option.BG_REFLECTIONS.comment=Polished metal, water and other smooth Lit surfaces reflect the world on screen. Off: they reflect only the sky, for more FPS.',
+    'option.BG_REFLECTION_STEPS=Reflection Quality',
+    'option.BG_REFLECTION_STEPS.comment=Steps each reflection ray takes. More finds thinner and further things, and is slower.',
   ];
   for (const n of names) {
     const s = c.settings.get(n);

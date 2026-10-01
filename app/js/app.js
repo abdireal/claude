@@ -1201,7 +1201,7 @@ async function copyText(text, btn) {
 function openCode() {
   const { files, errors } = buildIris(state.graphs, { name: state.packName, modelBlocks: MD.modelBlocks(), shadows: state.shadows });
   const wrap = el('div', 'code-view');
-  const order = ['shaders/gbuffers_terrain.fsh', 'shaders/gbuffers_terrain.vsh', 'shaders/gbuffers_entities.fsh', 'shaders/gbuffers_entities.vsh', 'shaders/gbuffers_hand.fsh', 'shaders/composite.fsh', 'shaders/shadow.vsh', 'shaders/shadow.fsh', 'shaders/shaders.properties', 'shaders/block.properties', 'shaders/item.properties', 'shaders/entity.properties', 'shaders/lang/en_us.lang'];
+  const order = ['shaders/gbuffers_terrain.fsh', 'shaders/gbuffers_terrain.vsh', 'shaders/gbuffers_entities.fsh', 'shaders/gbuffers_entities.vsh', 'shaders/gbuffers_hand.fsh', 'shaders/composite1.fsh', 'shaders/composite.fsh', 'shaders/shadow.vsh', 'shaders/shadow.fsh', 'shaders/shaders.properties', 'shaders/block.properties', 'shaders/item.properties', 'shaders/entity.properties', 'shaders/lang/en_us.lang'];
   const names = [...order, ...Object.keys(files).filter((f) => !order.includes(f))];
   const tabs = el('div', 'code-tabs');
   tabs.setAttribute('role', 'tablist');

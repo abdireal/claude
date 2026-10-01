@@ -18,7 +18,7 @@ const el = (tag, cls, text) => {
 };
 
 export const PACK_FORMAT = 75; // Minecraft Java 1.21.11
-export const SIZES = [16, 32, 64, 128, 256, 512];
+export const SIZES = [16, 32, 64, 128, 256, 512, 1024];
 
 // Common block textures to replace. Animated ones get a static .mcmeta on export.
 export const COMMON_TARGETS = [
@@ -291,24 +291,34 @@ export async function uploadImage(file) {
   return t;
 }
 
+// The Minecraft-friendly square size closest to a side length.
+export function snapSize(side) {
+  return SIZES.reduce((best, s) => (Math.abs(s - side) < Math.abs(best - side) ? s : best), 16);
+}
+
+// An image stretched (not cropped) to the snapped square size, the way
+// addImageTexture stores it. Model UVs cover the whole image.
+export function fitToSize(img) {
+  const side = Math.max(img.width, img.height);
+  const size = snapSize(side);
+  if (img.width === size && img.height === size) return img;
+  const c = document.createElement('canvas');
+  c.width = img.width;
+  c.height = img.height;
+  c.getContext('2d').putImageData(img, 0, 0);
+  const d = document.createElement('canvas');
+  d.width = d.height = size;
+  const g = d.getContext('2d');
+  g.imageSmoothingEnabled = size < side;
+  g.drawImage(c, 0, 0, img.width, img.height, 0, 0, size, size);
+  return g.getImageData(0, 0, size, size);
+}
+
 // Adds an image as a texture without cropping it: model UVs cover the whole
 // image, so it is stretched to the nearest Minecraft-friendly square instead.
 export function addImageTexture(img, name, { select = false } = {}) {
-  const side = Math.max(img.width, img.height);
-  const size = SIZES.reduce((best, s) => (Math.abs(s - side) < Math.abs(best - side) ? s : best), 16);
-  let out = img;
-  if (img.width !== size || img.height !== size) {
-    const c = document.createElement('canvas');
-    c.width = img.width;
-    c.height = img.height;
-    c.getContext('2d').putImageData(img, 0, 0);
-    const d = document.createElement('canvas');
-    d.width = d.height = size;
-    const g = d.getContext('2d');
-    g.imageSmoothingEnabled = size < side;
-    g.drawImage(c, 0, 0, img.width, img.height, 0, 0, size, size);
-    out = g.getImageData(0, 0, size, size);
-  }
+  const out = fitToSize(img);
+  const size = out.width;
   const t = {
     id: `t${ctx.state.texNext++}`,
     name: uniqueName(String(name || 'Image').slice(0, 40)),

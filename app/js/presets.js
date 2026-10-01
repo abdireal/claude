@@ -59,6 +59,48 @@ function softGrade(post, sat = 1.15, vig = 0.35) {
   wire(post, v, 'out', outp, 'color');
 }
 
+// Normal, AO and glow from the textures' material maps (LabPBR _n / _s, which
+// the Models tab exports). Returns the node so smoothness and metal can be mixed.
+function materialMaps(g, out, x, y, strength = null) {
+  const maps = add(g, 'materialMaps', x, y);
+  if (strength) wire(g, strength, 'out', maps, 's');
+  wire(g, maps, 'n', out, 'normal');
+  wire(g, maps, 'ao', out, 'ao');
+  wire(g, maps, 'emit', out, 'emission');
+  return maps;
+}
+
+// Swords, tools, armour and shields: bright pixels (the metal) turn shiny.
+// Returns { smooth, metal } nodes for vanilla gear without material maps.
+function shinyGear(g, tex, x = 40, y = 360) {
+  const swords = add(g, 'itemMask', x, y, { group: 'Swords' });
+  const tools = add(g, 'itemMask', x, y + 140, { group: 'Tools' });
+  const armor = add(g, 'itemMask', x, y + 280, { group: 'Armor' });
+  const shields = add(g, 'itemMask', x, y + 420, { group: 'Shields' });
+  const m1 = add(g, 'max', x + 260, y + 40);
+  const m2 = add(g, 'max', x + 260, y + 200);
+  const gear = add(g, 'max', x + 260, y + 360);
+  wire(g, swords, 'mask', m1, 'a');
+  wire(g, tools, 'mask', m1, 'b');
+  wire(g, m1, 'out', m2, 'a');
+  wire(g, armor, 'mask', m2, 'b');
+  wire(g, m2, 'out', gear, 'a');
+  wire(g, shields, 'mask', gear, 'b');
+  // Bright pixels are the metal blade; dark ones are the wooden handle.
+  const gray = add(g, 'grayscale', x + 520, y - 120);
+  const bright = add(g, 'smoothstep', x + 520, y + 40, {}, { e0: 0.35, e1: 0.7 });
+  wire(g, tex, 'rgb', gray, 'c');
+  wire(g, gray, 'luma', bright, 'x');
+  const metal = add(g, 'multiply', x + 780, y + 60);
+  wire(g, gear, 'out', metal, 'a');
+  wire(g, bright, 'out', metal, 'b');
+  const shineAmt = slider(g, x + 780, y + 220, 'WEAPON_SHINE', 'Weapon Shine', 0, 1, 0.05, 0.9);
+  const smooth = add(g, 'multiply', x + 1000, y + 140);
+  wire(g, metal, 'out', smooth, 'a');
+  wire(g, shineAmt, 'out', smooth, 'b');
+  return { smooth, metal };
+}
+
 // Presets -----------------------------------------------------------------------
 
 export const PRESETS = [
@@ -78,9 +120,50 @@ export const PRESETS = [
     },
   },
   {
+    id: 'realistic',
+    name: 'Realistic (PBR + reflections)',
+    blurb: 'Lit everything with normal maps, polished metal and mirror water. 3D models from the Models tab (like Sting) and PBR resource packs show their real material; in game, smooth things reflect the world.',
+    build() {
+      // Blocks: material maps from the resource pack, mirror-smooth water.
+      const terrain = graph();
+      const tOut = add(terrain, 'terrainOutput', 980, 120, { lighting: 'Lit' });
+      texturedBlocks(terrain, tOut);
+      wavingPlants(terrain, tOut, 620);
+      const bump = slider(terrain, 40, 340, 'NORMAL_MAP_STRENGTH', 'Normal Map Strength', 0, 2, 0.1, 1);
+      const tMaps = materialMaps(terrain, tOut, 300, 300, bump);
+      const type = add(terrain, 'blockType', 300, 520);
+      const tSmooth = add(terrain, 'max', 640, 380);
+      wire(terrain, tMaps, 'smooth', tSmooth, 'a');
+      wire(terrain, type, 'water', tSmooth, 'b');
+      wire(terrain, tSmooth, 'out', tOut, 'smooth');
+      wire(terrain, tMaps, 'metal', tOut, 'metal');
+
+      // Items & Entities: the same maps, plus shiny vanilla weapons and armour.
+      const entity = graph();
+      const out = add(entity, 'entityOutput', 1560, 80, { lighting: 'Lit' });
+      const { tex } = texturedBlocks(entity, out);
+      const eBump = slider(entity, 1040, 820, 'NORMAL_MAP_STRENGTH', 'Normal Map Strength', 0, 2, 0.1, 1);
+      const maps = materialMaps(entity, out, 1040, 600, eBump);
+      const gear = shinyGear(entity, tex);
+      const smooth = add(entity, 'max', 1300, 420);
+      const metal = add(entity, 'max', 1300, 560);
+      wire(entity, maps, 'smooth', smooth, 'a');
+      wire(entity, gear.smooth, 'out', smooth, 'b');
+      wire(entity, maps, 'metal', metal, 'a');
+      wire(entity, gear.metal, 'out', metal, 'b');
+      wire(entity, smooth, 'out', out, 'smooth');
+      wire(entity, metal, 'out', out, 'metal');
+      add(entity, 'note', 560, 900, { text: 'Material Maps reads the _n and _s textures next to each texture (LabPBR). The Models tab writes them for 3D models, so Sting gets its engraved, mirror-polished steel. Vanilla gear without maps uses the shiny-weapon mask instead.' });
+
+      const post = graph();
+      softGrade(post, 1.05, 0.25);
+      return { terrain, entity, post };
+    },
+  },
+  {
     id: 'shiny',
     name: 'Shiny Weapons',
-    blurb: 'Swords, tools, armour and shields turn to polished metal that catches the sun and reflects the sky.',
+    blurb: 'Swords, tools, armour and shields turn to polished metal that catches the sun and reflects the sky and the world.',
     build() {
       const terrain = graph();
       const tOut = add(terrain, 'terrainOutput', 640, 120);
@@ -89,36 +172,20 @@ export const PRESETS = [
 
       // Items & Entities: Lit lighting, and a metal mask for weapons and gear.
       const entity = graph();
-      const out = add(entity, 'entityOutput', 1240, 80, { lighting: 'Lit' });
+      const out = add(entity, 'entityOutput', 1560, 80, { lighting: 'Lit' });
       const { tex } = texturedBlocks(entity, out);
-      const swords = add(entity, 'itemMask', 40, 360, { group: 'Swords' });
-      const tools = add(entity, 'itemMask', 40, 500, { group: 'Tools' });
-      const armor = add(entity, 'itemMask', 40, 640, { group: 'Armor' });
-      const shields = add(entity, 'itemMask', 40, 780, { group: 'Shields' });
-      const m1 = add(entity, 'max', 300, 400);
-      const m2 = add(entity, 'max', 300, 560);
-      const gear = add(entity, 'max', 300, 720);
-      wire(entity, swords, 'mask', m1, 'a');
-      wire(entity, tools, 'mask', m1, 'b');
-      wire(entity, m1, 'out', m2, 'a');
-      wire(entity, armor, 'mask', m2, 'b');
-      wire(entity, m2, 'out', gear, 'a');
-      wire(entity, shields, 'mask', gear, 'b');
-      // Bright pixels are the metal blade; dark ones are the wooden handle.
-      const gray = add(entity, 'grayscale', 560, 240);
-      const bright = add(entity, 'smoothstep', 560, 400, {}, { e0: 0.35, e1: 0.7 });
-      wire(entity, tex, 'rgb', gray, 'c');
-      wire(entity, gray, 'luma', bright, 'x');
-      const metal = add(entity, 'multiply', 820, 420);
-      wire(entity, gear, 'out', metal, 'a');
-      wire(entity, bright, 'out', metal, 'b');
-      const shineAmt = slider(entity, 820, 580, 'WEAPON_SHINE', 'Weapon Shine', 0, 1, 0.05, 0.9);
-      const smooth = add(entity, 'multiply', 1040, 500);
-      wire(entity, metal, 'out', smooth, 'a');
-      wire(entity, shineAmt, 'out', smooth, 'b');
+      const gear = shinyGear(entity, tex);
+      // 3D models and PBR packs bring their own maps; the brightest wins.
+      const maps = materialMaps(entity, out, 1040, 600);
+      const smooth = add(entity, 'max', 1300, 420);
+      const metal = add(entity, 'max', 1300, 560);
+      wire(entity, gear.smooth, 'out', smooth, 'a');
+      wire(entity, maps, 'smooth', smooth, 'b');
+      wire(entity, gear.metal, 'out', metal, 'a');
+      wire(entity, maps, 'metal', metal, 'b');
       wire(entity, smooth, 'out', out, 'smooth');
       wire(entity, metal, 'out', out, 'metal');
-      add(entity, 'note', 560, 640, { text: 'Item ID Mask reads item.properties, so it works on held, dropped and framed items and on worn armour. Lighting is Lit on the output, so Smoothness and Metallic catch the sun and reflect the sky.' });
+      add(entity, 'note', 560, 900, { text: 'Item ID Mask reads item.properties, so it works on held, dropped and framed items and on worn armour. Lighting is Lit on the output, so Smoothness and Metallic catch the sun and reflect the sky.' });
 
       const post = graph();
       softGrade(post, 1.1, 0.3);
