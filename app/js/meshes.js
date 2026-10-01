@@ -413,13 +413,41 @@ export function longAxisRotation(mesh) {
   return [-90, 0, 0];
 }
 
+// With the long side along +Y, is the handle at the top? The guard is the
+// widest part of a sword and sits near the handle, so look for the widest slice.
+export function handleAtTop(mesh, rot) {
+  const m = mat4.mul(mat4.rotZ(rot[2]), mat4.mul(mat4.rotY(rot[1]), mat4.rotX(rot[0])));
+  const n = mesh.pos.length / 3;
+  const P = [];
+  let y0 = Infinity, y1 = -Infinity;
+  for (let i = 0; i < n; i++) {
+    const p = mat4.point(m, mesh.pos[i * 3], mesh.pos[i * 3 + 1], mesh.pos[i * 3 + 2]);
+    P.push(p);
+    y0 = Math.min(y0, p[1]);
+    y1 = Math.max(y1, p[1]);
+  }
+  const bins = 16;
+  const lo = new Array(bins).fill(Infinity), hi = new Array(bins).fill(-Infinity);
+  for (const p of P) {
+    const b = Math.min(bins - 1, Math.floor(((p[1] - y0) / (y1 - y0 || 1)) * bins));
+    lo[b] = Math.min(lo[b], p[0], p[2]);
+    hi[b] = Math.max(hi[b], p[0], p[2]);
+  }
+  let best = 0, widest = -1;
+  for (let b = 0; b < bins; b++) if (hi[b] - lo[b] > widest) { widest = hi[b] - lo[b]; best = b; }
+  return best >= bins / 2;
+}
+
 // Presets for how the mesh sits in the 0..1 block space.
 export function presetFit(kind, mesh) {
   const long = longAxisRotation(mesh);
   switch (kind) {
     // Handle bottom-left, tip top-right, flat in the z = 0.5 plane: where a
     // vanilla 16x16 sword sprite sits, so Minecraft's handheld poses fit.
-    case 'sword': return { s: 1.25, r: [long[0], long[1], long[2] - 45], t: [0, 0, 0] };
+    case 'sword': {
+      const turn = handleAtTop(mesh, long) ? 135 : -45;
+      return { s: 1.25, r: [long[0], long[1], long[2] + turn], t: [0, 0, 0] };
+    }
     // Centred as modelled, the size of a normal item.
     case 'item': return { s: 0.95, r: [0, 0, 0], t: [0, 0, 0] };
     // As tall as the vanilla shield (22 pixels), plate a little in front of centre.

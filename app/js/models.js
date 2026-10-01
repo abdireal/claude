@@ -316,12 +316,16 @@ export function addSample(kind) {
 }
 
 // Imports a 3D file. `files` may also hold its .mtl, .bin and image files.
-export async function importFiles(fileList) {
+// `defaults` sets what the model is for (use, target, hold) right away.
+export async function importFiles(fileList, defaults = {}) {
   const files = [...fileList];
   const byName = new Map(files.map((f) => [f.name.toLowerCase(), f]));
   const find = (name) => (name ? byName.get(String(name).toLowerCase().split('/').pop()) : null);
   const main = files.find((f) => /\.(glb|gltf|obj)$/i.test(f.name));
-  if (!main) throw new Error('Pick a .obj, .glb or .gltf file (with its .mtl, .bin and textures if it has them).');
+  if (!main) {
+    if (files.some((f) => /\.blend\d?$/i.test(f.name))) throw new Error('Blender files cannot be read in the browser. In Blender use File → Export → glTF 2.0 (.glb), then import the .glb here.');
+    throw new Error('Pick a .obj, .glb or .gltf file (with its .mtl, .bin and textures if it has them).');
+  }
   const name = main.name.replace(/\.[a-z0-9]+$/i, '').replace(/[_-]+/g, ' ').trim().slice(0, 40) || 'Model';
 
   let mesh, imageSources = []; // per our image index: () => Promise<ImageData>
@@ -388,7 +392,7 @@ export async function importFiles(fileList) {
       texFor[i] = t;
     }
   }
-  const model = addModel(mesh, { name, use: 'custom', hold: 'item', texFor });
+  const model = addModel(mesh, { name, use: 'custom', hold: 'item', texFor, ...defaults });
   afterChange(true);
   const tris = mesh.mat.length.toLocaleString('en');
   let msg = `Imported “${model.name}”: ${tris} triangles, ${mesh.materials.length} material${mesh.materials.length === 1 ? '' : 's'}.`;
@@ -396,6 +400,19 @@ export async function importFiles(fileList) {
   if (noUv) msg += ' It had no UVs, so each material got a flat colour.';
   ctx.toast(msg);
   return model;
+}
+
+// Samples that ship as files next to the app (app/samples).
+const FILE_SAMPLES = {
+  sting: { url: 'samples/sting.glb', file: 'Sting.glb', use: 'item', target: 'minecraft:netherite_sword', hold: 'sword' },
+};
+
+export async function addFileSample(kind) {
+  const s = FILE_SAMPLES[kind];
+  const res = await fetch(s.url);
+  if (!res.ok) throw new Error(`Could not load the ${s.file} sample.`);
+  const blob = await res.blob();
+  return importFiles([new File([blob], s.file)], { use: s.use, target: s.target, hold: s.hold });
 }
 
 export function removeModel(id) {
@@ -1125,9 +1142,18 @@ export async function initModels(context) {
 
   const menu = $('#menu-model');
   const items = [
+    ['sting', 'Sting', 'Bilbo\u2019s sword with its blue inscription, replacing the netherite sword. About 1,100 triangles.'],
     ['sword', 'Sample: Sword', 'A low-poly sword that replaces the diamond sword.'],
     ['crystal', 'Sample: Crystal cluster', 'Glowing crystals that replace the flower pot block.'],
   ];
+  const runSample = async (k) => {
+    try {
+      if (FILE_SAMPLES[k]) await addFileSample(k);
+      else addSample(k);
+    } catch (err) {
+      ctx.toast(err.message || 'Could not load that sample.');
+    }
+  };
   for (const [k, title, blurb] of items) {
     const b = el('button', 'menu-item');
     b.type = 'button';
@@ -1135,7 +1161,7 @@ export async function initModels(context) {
     b.append(el('strong', null, title), el('span', null, blurb));
     b.addEventListener('click', () => {
       menu.hidden = true;
-      addSample(k);
+      runSample(k);
     });
     menu.append(b);
   }
@@ -1151,6 +1177,7 @@ export async function initModels(context) {
     }
   });
   for (const id of ['#model-import', '#model-empty-import']) $(id)?.addEventListener('click', () => $('#model-input').click());
+  $('#model-empty-sting')?.addEventListener('click', () => runSample('sting'));
   $('#model-empty-sword')?.addEventListener('click', () => addSample('sword'));
   $('#model-empty-crystal')?.addEventListener('click', () => addSample('crystal'));
   const run = async (files) => {
