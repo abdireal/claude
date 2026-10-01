@@ -311,7 +311,7 @@ function irisShadowOptions(sh) {
   const f2 = (x) => x.toFixed(2);
   return [
     '#define BG_REFLECTIONS // Smooth Lit surfaces reflect what is on screen',
-    '#define BG_MATERIAL_VIEW 0 // [0 1 2] Debug: colour Lit surfaces by normal, or by smoothness (red) and metal (green)',
+    '#define BG_MATERIAL_VIEW 0 // [0 1 2]',
     `${sh.on ? '' : '//'}#define BG_SHADOWS // Sun shadows from a shadow map`,
     `#define BG_SHADOW_STRENGTH ${f2(sh.strength)} // [${SHADOW_CHOICES.strength.map(f2).join(' ')}]`,
     `#define BG_SHADOW_SOFTNESS ${f2(sh.softness)} // [${SHADOW_CHOICES.softness.map(f2).join(' ')}]`,
