@@ -50,6 +50,7 @@
   --c-normal: #3f7fbf;
   --c-uv: #2d8f5e;
   --c-utility: #5d5f6b;
+  --c-motion: #b5476a;
 
   /* Sticky notes stay paper-yellow in both themes. */
   --note-bg: #f6e7a1;
@@ -223,7 +224,7 @@ svg { flex: none; }
   border-bottom: 1px solid var(--line);
   min-width: 0;
 }
-.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 10px; flex: none; }
 .logo { width: 26px; height: 26px; }
 .logo-top { fill: var(--accent); }
 .logo-left { fill: color-mix(in srgb, var(--accent) 62%, #3a2a0a); }
@@ -267,6 +268,8 @@ svg { flex: none; }
   color: var(--fg-2);
   font-weight: 600;
   font-size: 13.5px;
+  white-space: nowrap;
+  flex: none;
   cursor: pointer;
 }
 .graph-tab:hover { color: var(--fg); }
@@ -315,6 +318,7 @@ svg { flex: none; }
 .menu-item strong { font-weight: 600; font-size: 13.5px; }
 .menu-item span { font-size: 12.5px; color: var(--fg-2); }
 .menu-sep { height: 1px; background: var(--line); margin: 6px 4px; }
+.menu-label { margin: 6px 10px 2px; font-size: 11px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase; color: var(--fg-3); }
 
 .mobile-switch { display: none; }
 
@@ -404,6 +408,7 @@ svg { flex: none; }
 .cat-normal { --cat: var(--c-normal); }
 .cat-uv { --cat: var(--c-uv); }
 .cat-utility { --cat: var(--c-utility); }
+.cat-motion { --cat: var(--c-motion); }
 
 .t-float { --tc: var(--t-float); }
 .t-vec2 { --tc: var(--t-vec2); }
@@ -631,6 +636,17 @@ svg { flex: none; }
 .preview-msg { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: #d9dde6; background: #15181f; font-size: 13px; }
 .preview-msg[hidden] { display: none; }
 .preview-controls { display: grid; gap: 4px; margin-top: 10px; }
+.app.mode-anim .preview-controls { display: none; }
+.anim-controls { display: grid; gap: 8px; margin-top: 10px; }
+.anim-controls[hidden] { display: none; }
+.an-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.an-mob { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--fg-2); }
+.an-mob select { min-width: 112px; }
+.an-actions { display: inline-flex; gap: 6px; }
+.an-toggles { display: flex; flex-wrap: wrap; gap: 6px 14px; }
+.anim-need { display: grid; gap: 4px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-2); font-size: 12.5px; color: var(--fg-2); }
+.anim-need strong { color: var(--fg); font-weight: 600; }
+.ctl-text { width: 100%; min-width: 0; font-family: var(--font-mono); }
 .pv-row { display: grid; grid-template-columns: 42px minmax(0, 1fr) 112px; align-items: center; gap: 10px; font-size: 12.5px; color: var(--fg-2); }
 .pv-row input { accent-color: var(--accent); width: 100%; }
 .pv-row output { font-family: var(--font-mono); font-size: 11.5px; color: var(--fg); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -865,9 +881,24 @@ pre.insp-error { white-space: pre-wrap; font-size: 11.5px; margin: 0; }
 
 /* ------------------------------------------------------------ responsive */
 
+/* The top bar holds six graph tabs: it drops the target chip, then the long
+   tab names, then the Why button, and below 1040 px puts the tabs on a row of their own. */
+@media (max-width: 1660px) {
+  .target-chip { display: none; }
+}
+
+@media (max-width: 1460px) {
+  .hide-md { display: none; }
+  .graph-tab { padding: 0 12px; }
+}
+
+@media (max-width: 1340px) and (min-width: 861px) {
+  #btn-why { display: none; }
+  #btn-code .hide-sm { display: none; }
+}
+
 @media (max-width: 1180px) {
   .app { grid-template-columns: 212px minmax(0, 1fr) 320px; }
-  .target-chip { display: none; }
   .why-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
@@ -898,8 +929,22 @@ pre.insp-error { white-space: pre-wrap; font-size: 11.5px; margin: 0; }
   .pv-row { grid-template-columns: 42px minmax(0, 1fr) 100px; }
 }
 
+@media (max-width: 1100px) and (min-width: 861px) {
+  .topbar { gap: 12px; }
+  .graph-tabs { margin-left: 0; }
+  .graph-tab { padding: 0 10px; }
+}
+
+@media (max-width: 1040px) and (min-width: 861px) {
+  .topbar { flex-wrap: wrap; row-gap: 8px; }
+  .graph-tabs { order: 3; }
+}
+
 @media (max-width: 480px) {
   .btn#btn-presets { padding: 0 10px; }
+  .graph-tabs { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .graph-tab { padding: 0 8px; flex: none; }
+  .top-actions { flex-wrap: wrap; }
   .export-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .export-stat strong { font-size: 20px; }
 }

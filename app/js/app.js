@@ -6,7 +6,9 @@ import { defaultParams, collectSettings, inferTypes } from './codegen.js';
 import { buildPreview, buildIris, sliderValues, buildNodePreview, previewableNode, PREVIEW_TILE, choiceOptions, choiceIndex, defaultEntityGraph, normShadows, SHADOW_CHOICES } from './targets.js';
 import { GraphEditor } from './editor.js';
 import { Preview } from './preview.js';
-import { PRESETS } from './presets.js';
+import { PRESETS, ANIM_PRESETS, defaultAnimGraph } from './presets.js';
+import { compileAnim, makeAnimProgram, buildEmfFiles, checkCompiled, sampleNode } from './anim.js';
+import { MOBS, MOB_IDS } from './mobs.js';
 import { makeZip } from './zip.js';
 import * as TX from './textures.js';
 import * as MD from './models.js';
@@ -44,6 +46,10 @@ const GRAPH_INFO = {
     name: 'Post FX',
     caption: 'Runs once on the finished screen image. Exports to composite.',
   },
+  anim: {
+    name: 'Animations',
+    caption: 'Moves mob body parts: walking, idling, attacking and more. Exports Entity Model Features animations in the resource pack.',
+  },
   texture: {
     name: 'Texture',
     caption: 'Builds a texture pixel by pixel. It can replace a Minecraft texture (resource pack) or feed shaders via Image Texture.',
@@ -59,7 +65,7 @@ const GRAPH_INFO = {
 const state = {
   graphs: null,
   kind: 'terrain',
-  views: { terrain: null, entity: null, post: null },
+  views: { terrain: null, entity: null, post: null, anim: null },
   packName: 'My BlockGraph Pack',
   presetId: 'waving',
   textures: [],
@@ -109,7 +115,7 @@ function pushHistory() {
 
 function restore(s) {
   const data = JSON.parse(s);
-  state.graphs = withEntityGraph(data.graphs);
+  state.graphs = withNewGraphs(data.graphs);
   state.packName = data.packName || state.packName;
   state.textures = data.textures || [];
   state.texSel = data.texSel || null;
@@ -173,10 +179,11 @@ function validGraphs(g) {
   return g && ['terrain', 'post'].every((k) => graphOk(g[k]));
 }
 
-// Files and autosaves from before the Items & Entities graph have no entity
-// graph. They get the default one, which looks like vanilla.
-function withEntityGraph(g) {
+// Files and autosaves from older versions miss newer graphs. They get the
+// defaults: a vanilla-looking Items & Entities graph and the starter animations.
+function withNewGraphs(g) {
   if (!graphOk(g.entity)) g.entity = { ...defaultEntityGraph(), needsLayout: true };
+  if (!g.anim || !Array.isArray(g.anim.nodes) || !Array.isArray(g.anim.links)) g.anim = { ...defaultAnimGraph(), needsLayout: true };
   return g;
 }
 
@@ -186,9 +193,9 @@ function loadInitial() {
     try {
       const d = JSON.parse(raw);
       if (validGraphs(d.graphs)) {
-        state.graphs = withEntityGraph(d.graphs);
+        state.graphs = withNewGraphs(d.graphs);
         state.packName = d.packName || state.packName;
-        state.kind = ['entity', 'post', 'texture', 'model'].includes(d.kind) ? d.kind : 'terrain';
+        state.kind = ['entity', 'post', 'anim', 'texture', 'model'].includes(d.kind) ? d.kind : 'terrain';
         state.presetId = d.presetId || null;
         state.textures = Array.isArray(d.textures) ? d.textures : [];
         state.texSel = d.texSel || null;
@@ -201,7 +208,7 @@ function loadInitial() {
       }
     } catch { /* fall through to the default preset */ }
   }
-  state.graphs = withEntityGraph(PRESETS[0].build());
+  state.graphs = withNewGraphs(PRESETS[0].build());
   for (const g of Object.values(state.graphs)) g.needsLayout = true;
 }
 
@@ -209,6 +216,7 @@ function loadInitial() {
 
 let compileTimer = 0;
 let lastErrors = [];
+let lastAnim = null;
 let glErrors = null;
 
 function scheduleCompile(delay = 120) {
@@ -225,13 +233,20 @@ function compileNow() {
     }
   }
   const built = buildPreview(state.graphs);
-  lastErrors = built.errors;
+  const anim = compileAnim(state.graphs.anim);
+  lastAnim = anim;
+  lastErrors = [
+    ...built.errors,
+    ...anim.errors.map((e) => ({ ...e, graph: 'anim' })),
+    ...checkCompiled(anim).map((msg) => ({ node: null, graph: 'anim', msg: `Animation expression problem: ${msg}` })),
+  ];
   glErrors = null;
   if (preview.ok) {
     const r = preview.setShaders(built);
     if (!r.ok) glErrors = r;
     preview.setSettings(built.settings);
     preview.setShadows(state.shadows);
+    preview.setAnimProgram(makeAnimProgram(anim));
   }
   editor.setErrors(lastErrors.filter((e) => e.graph === state.kind || e.graph === null));
   renderStatus();
@@ -252,6 +267,12 @@ function updateNodePreviews() {
     preview.setNodePreviews([], PREVIEW_TILE);
     return;
   }
+  if (state.kind === 'anim') {
+    preview.setNodePreviews([], PREVIEW_TILE);
+    previewImages = animCurves(g);
+    paintPreviews();
+    return;
+  }
   const items = [];
   for (const n of g.nodes) {
     if (!previewableNode(NODE_DEFS[n.type])) continue;
@@ -263,6 +284,53 @@ function updateNodePreviews() {
   const ids = new Set(g.nodes.map((n) => n.id));
   previewImages = new Map([...previewImages].filter(([id]) => ids.has(id)));
   preview.setNodePreviews(items, PREVIEW_TILE, TX.selectedTexture()?.size || 16);
+}
+
+// Animation nodes show their value over a short clip: the mob speeds up to a
+// walk, attacks at 2 s and gets hurt at 3 s.
+function animCurves(g) {
+  const out = new Map();
+  const W = 160, H = 96;
+  const c = document.createElement('canvas');
+  c.width = W;
+  c.height = H;
+  const ctx = c.getContext('2d');
+  for (const n of g.nodes) {
+    const def = NODE_DEFS[n.type];
+    if (!previewableNode(def) || !def.cem) continue;
+    const r = sampleNode(g, n.id, def.outputs[0].id);
+    if (r.error) { out.set(n.id, { error: r.error }); continue; }
+    const v = r.values;
+    let lo = Math.min(0, ...v), hi = Math.max(0, ...v);
+    if (hi - lo < 1e-6) { hi += 1; lo -= 1; }
+    const y = (x) => 10 + (1 - (x - lo) / (hi - lo)) * (H - 26);
+    ctx.fillStyle = '#15171c';
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = 'rgba(255,255,255,0.05)';
+    for (const [a, b] of [[2, 2.3], [3, 3.5]]) ctx.fillRect((a / 4) * W, 0, ((b - a) / 4) * W, H - 14);
+    ctx.strokeStyle = 'rgba(255,255,255,0.18)';
+    ctx.beginPath();
+    ctx.moveTo(0, y(0) + 0.5);
+    ctx.lineTo(W, y(0) + 0.5);
+    ctx.stroke();
+    ctx.strokeStyle = '#f2b84b';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    v.forEach((x, i) => {
+      const px = (i / (v.length - 1)) * W;
+      if (i) ctx.lineTo(px, y(x)); else ctx.moveTo(px, y(x));
+    });
+    ctx.stroke();
+    ctx.lineWidth = 1;
+    ctx.fillStyle = 'rgba(255,255,255,0.55)';
+    ctx.font = '10px ui-monospace, monospace';
+    const f = (x) => (Math.abs(x) >= 100 ? x.toFixed(0) : Math.abs(x) >= 10 ? x.toFixed(1) : x.toFixed(2));
+    ctx.fillText(f(hi), 4, 10);
+    ctx.fillText(f(lo), 4, H - 16);
+    ctx.fillText('walk · hit · hurt', W - 88, H - 3);
+    out.set(n.id, { img: ctx.getImageData(0, 0, W, H) });
+  }
+  return out;
 }
 
 function paintPreviews() {
@@ -340,6 +408,7 @@ const editor = new GraphEditor($('#canvas'), {
 
 const preview = new Preview($('#preview'));
 preview.onNodePreviews = (map) => {
+  if (state.kind === 'anim') return;
   previewImages = map;
   let changed = false;
   for (const [id, r] of map) {
@@ -389,6 +458,7 @@ function switchGraph(kind) {
   syncTextureView();
   if (firstTime) requestAnimationFrame(() => editor.frameAll());
   $('#graph-caption').textContent = GRAPH_INFO[kind].caption;
+  syncAnimView();
   renderLibrary();
   renderInspector();
   editor.setErrors(lastErrors.filter((e) => e.graph === kind || e.graph === null));
@@ -397,6 +467,22 @@ function switchGraph(kind) {
   layoutIfNeeded();
   renderStatus();
   save();
+}
+
+// Animations tab: the preview zooms in on the mob and shows its controls.
+function syncAnimView() {
+  const on = state.kind === 'anim';
+  document.querySelector('.app').classList.toggle('mode-anim', on);
+  $('#anim-controls').hidden = !on;
+  preview.setAnimMode(on);
+  if (on) {
+    const used = lastAnim ? [...lastAnim.mobs.keys()] : [];
+    const sel = $('#an-mob');
+    if (used.length && !used.includes(sel.value)) {
+      sel.value = used[0];
+      preview.animCtl.mob = used[0];
+    }
+  }
 }
 
 // Shows or hides the Textures panel and the note for uploaded images.
@@ -785,14 +871,28 @@ function renderNodeInspector(box, node) {
         sec.append(field(p.name, c));
       } else if (p.kind === 'select') {
         const s = el('select', 'in-select');
-        for (const o of p.options) {
+        for (const o of typeof p.options === 'function' ? p.options(P) : p.options) {
           const opt = el('option', null, o);
           opt.value = o;
           s.append(opt);
         }
         s.value = P[p.id];
-        s.addEventListener('change', () => { node.params[p.id] = s.value; commit(); });
+        s.addEventListener('change', () => {
+          node.params[p.id] = s.value;
+          if (def.onParamChange) {
+            def.onParamChange(node.params, p.id);
+            editor.render();
+            renderInspector();
+          }
+          commit();
+        });
         sec.append(field(p.name, s));
+      } else if (p.kind === 'text') {
+        const t = el('input', 'in-text mono');
+        t.value = P[p.id];
+        t.spellcheck = false;
+        t.addEventListener('change', () => { node.params[p.id] = t.value; commit(); editor.render(); });
+        sec.append(field(p.name, t, def.type === 'animKeyframes' ? 'Numbers separated by commas, for example 0, 20, 0, -20.' : undefined));
       } else if (p.kind === 'bool') {
         const sw = el('label', 'ctl-switch');
         const cb = el('input');
@@ -995,6 +1095,17 @@ function renderGraphInspector(box) {
     return;
   }
   box.append(el('p', 'insp-eyebrow', 'Graph'), el('h2', 'insp-title', `${GRAPH_INFO[kind].name} graph`), el('p', 'insp-desc', GRAPH_INFO[kind].caption));
+  if (kind === 'anim') {
+    box.append(animInfoSection());
+    box.append(tipsSection([
+      ['Animate a part', 'Add Animate Part, pick the mob and part, wire motion into Rotate or Move'],
+      ['Read the mob', 'Walk Cycle, Head Look, Attack, Hurt & Health and Mob State'],
+      ['Shape it', 'Wave and Keyframes for loops, Smooth to blend, Ease for snappy moves'],
+      ['Try it', 'Use Attack, Hurt, Jump and Sneak under the preview'],
+      ['Undo', 'Ctrl+Z (Cmd+Z on Mac)'],
+    ]));
+    return;
+  }
 
   const { settings } = collectSettings(state.graphs);
   const sec = el('section', 'insp-sec');
@@ -1036,24 +1147,56 @@ function renderGraphInspector(box) {
   }
   box.append(sec);
   box.append(shadowSection());
-
-  const tips = el('section', 'insp-sec');
-  tips.append(el('h3', null, 'Quick moves'));
-  const ul = el('ul', 'tips');
-  for (const t of [
+  box.append(tipsSection([
     ['Add a node', 'Right-click or double-click the canvas, or press Space'],
     ['Connect', 'Drag from an output dot to an input dot'],
     ['Move a wire', 'Drag it off the input it plugs into'],
     ['Select many', 'Shift-drag on empty canvas'],
     ['Delete', 'Select, then press Delete'],
     ['Undo', 'Ctrl+Z (Cmd+Z on Mac)'],
-  ]) {
+  ]));
+}
+
+function tipsSection(list) {
+  const tips = el('section', 'insp-sec');
+  tips.append(el('h3', null, 'Quick moves'));
+  const ul = el('ul', 'tips');
+  for (const t of list) {
     const li = el('li');
     li.append(el('strong', null, t[0]), el('span', null, t[1]));
     ul.append(li);
   }
   tips.append(ul);
-  box.append(tips);
+  return tips;
+}
+
+// Which mobs the Animations graph moves, and what the game needs for it.
+function animInfoSection() {
+  const sec = el('section', 'insp-sec');
+  sec.append(el('h3', null, 'Animated mobs'));
+  const mobs = lastAnim ? [...lastAnim.mobs] : [];
+  if (!mobs.length) {
+    sec.append(el('p', 'insp-desc', 'Nothing moves yet. Add an Animate Part node and wire a motion into it.'));
+  } else {
+    const ul = el('ul', 'tips');
+    for (const [mob, m] of mobs) {
+      const li = el('li');
+      const parts = [...new Set(m.lines.filter(([k]) => !k.startsWith('var.')).map(([k]) => k.split('.')[0]))];
+      li.append(el('strong', null, MOBS[mob].label), el('span', null, `${parts.join(', ')}. Also ${MOBS[mob].also}.`));
+      li.style.cursor = 'pointer';
+      li.title = 'Show this mob in the preview';
+      li.addEventListener('click', () => { $('#an-mob').value = mob; preview.animCtl.mob = mob; });
+      ul.append(li);
+    }
+    sec.append(ul);
+  }
+  const need = el('div', 'anim-need');
+  need.append(
+    el('strong', null, 'To see it in game'),
+    el('span', null, 'Install Entity Model Features (EMF) and Entity Texture Features (ETF) for Fabric 1.21.11 next to Iris, then turn on the resource pack from Export.'),
+  );
+  sec.append(need);
+  return sec;
 }
 
 // Pack-wide sun shadows. Strength, softness and sun angle show up live in the
@@ -1136,7 +1279,7 @@ function renderStatus() {
     s.textContent = 'Preview is live. Export when it looks right.';
   }
   const { settings } = collectSettings(state.graphs);
-  $('#status-counts').textContent = `Blocks ${state.graphs.terrain.nodes.length} · Items ${state.graphs.entity.nodes.length} · Post FX ${state.graphs.post.nodes.length} nodes · ${state.textures.length} texture${state.textures.length === 1 ? '' : 's'} · ${state.models.length} model${state.models.length === 1 ? '' : 's'} · ${settings.size} setting${settings.size === 1 ? '' : 's'}`;
+  $('#status-counts').textContent = `Blocks ${state.graphs.terrain.nodes.length} · Items ${state.graphs.entity.nodes.length} · Post FX ${state.graphs.post.nodes.length} · Anim ${state.graphs.anim.nodes.length} nodes · ${state.textures.length} texture${state.textures.length === 1 ? '' : 's'} · ${state.models.length} model${state.models.length === 1 ? '' : 's'} · ${settings.size} setting${settings.size === 1 ? '' : 's'}`;
 }
 
 function refreshAll() {
@@ -1199,7 +1342,10 @@ async function copyText(text, btn) {
 }
 
 function openCode() {
-  const { files, errors } = buildIris(state.graphs, { name: state.packName, modelBlocks: MD.modelBlocks(), shadows: state.shadows });
+  const built = buildIris(state.graphs, { name: state.packName, modelBlocks: MD.modelBlocks(), shadows: state.shadows });
+  const errors = built.errors;
+  const files = { ...built.files };
+  for (const [k, v] of Object.entries(buildEmfFiles(compileAnim(state.graphs.anim)))) files[`resource pack/${k}`] = v;
   const wrap = el('div', 'code-view');
   const order = ['shaders/gbuffers_terrain.fsh', 'shaders/gbuffers_terrain.vsh', 'shaders/gbuffers_entities.fsh', 'shaders/gbuffers_entities.vsh', 'shaders/gbuffers_hand.fsh', 'shaders/composite.fsh', 'shaders/shadow.vsh', 'shaders/shadow.fsh', 'shaders/shaders.properties', 'shaders/block.properties', 'shaders/item.properties', 'shaders/entity.properties', 'shaders/lang/en_us.lang'];
   const names = [...order, ...Object.keys(files).filter((f) => !order.includes(f))];
@@ -1303,7 +1449,7 @@ function openExport() {
   const fileCount = Object.keys(files).length;
   const stats = [
     [String(fileCount), 'files in the pack'],
-    [String(state.graphs.terrain.nodes.length + state.graphs.entity.nodes.length + state.graphs.post.nodes.length), 'nodes compiled'],
+    [String(state.graphs.terrain.nodes.length + state.graphs.entity.nodes.length + state.graphs.post.nodes.length + state.graphs.anim.nodes.length), 'nodes compiled'],
     [String(settings.size), `in-game setting${settings.size === 1 ? '' : 's'}`],
   ];
   for (const [n, l] of stats) {
@@ -1328,20 +1474,23 @@ function openExport() {
   actions.append(dl, js);
   wrap.append(actions);
 
-  // Resource pack: textures that replace Minecraft textures, and 3D models.
+  // Resource pack: textures that replace Minecraft textures, 3D models and the mob animations.
   const rpCount = TX.texturesWithTarget().length;
   const modelCount = MD.modelCount();
+  const animFiles = buildEmfFiles(compileAnim(state.graphs.anim));
+  const animMobs = lastAnim ? [...lastAnim.mobs.keys()].map((m) => MOBS[m].label) : [];
   const rp = el('section', 'export-rp');
   rp.append(el('h3', 'export-h', 'Resource pack'));
   const parts = [];
-  if (rpCount) parts.push(`${rpCount} texture${rpCount === 1 ? '' : 's'} from the Textures tab replace${rpCount === 1 ? 's' : ''} Minecraft textures`);
-  if (modelCount) parts.push(`${modelCount} 3D model${modelCount === 1 ? '' : 's'} from the Models tab, with ${modelCount === 1 ? 'its' : 'their'} textures`);
+  if (rpCount) parts.push(`${rpCount} texture${rpCount === 1 ? '' : 's'} from the Textures tab replace${rpCount === 1 ? 's' : ''} Minecraft textures.`);
+  if (modelCount) parts.push(`${modelCount} 3D model${modelCount === 1 ? '' : 's'} from the Models tab, with ${modelCount === 1 ? 'its' : 'their'} textures.`);
+  if (animMobs.length) parts.push(`Animations move ${animMobs.join(', ')} (${Object.keys(animFiles).length} .jem files, which need the Entity Model Features and Entity Texture Features mods).`);
   rp.append(el('p', 'modal-lead', parts.length
-    ? `${parts.join(', and ')}. Put this zip in .minecraft/resourcepacks and turn it on next to the shader pack, so your shader runs on your own textures.`
-    : 'Nothing for the resource pack yet. In the Textures tab, set “Replaces” on a texture (for example block/stone), or add a 3D model in the Models tab.'));
+    ? `${parts.join(' ')} Put this zip in .minecraft/resourcepacks and turn it on next to the shader pack.`
+    : 'Nothing for a resource pack yet. Set “Replaces” on a texture in the Textures tab, add a 3D model in the Models tab, or animate a mob in the Animations tab.'));
   const rpBtn = el('button', 'btn primary', 'Download resource pack (.zip)');
   rpBtn.type = 'button';
-  rpBtn.disabled = !rpCount && !modelCount;
+  rpBtn.disabled = !rpCount && !modelCount && !Object.keys(animFiles).length;
   const rpNote = el('div');
   rpBtn.addEventListener('click', async () => {
     const { files: rpFiles } = await TX.buildResourcePackFiles(state.packName);
@@ -1352,7 +1501,7 @@ function openExport() {
       w.textContent = models.problems.join(' ');
       rpNote.append(w);
     }
-    await saveFile(`${slug(state.packName)}_textures.zip`, makeZip({ ...rpFiles, ...models.files }));
+    await saveFile(`${slug(state.packName)}_textures.zip`, makeZip({ ...rpFiles, ...models.files, ...animFiles }));
   });
   rp.append(rpBtn, rpNote);
   wrap.append(rp);
@@ -1371,7 +1520,7 @@ function openExport() {
 
   const steps = el('ol', 'install-steps');
   for (const s of [
-    ['Install Iris', 'Fabric Loader for 1.21.11, then the Iris and Sodium mods.'],
+    ['Install Iris', 'Fabric Loader for 1.21.11, then the Iris and Sodium mods. For mob animations also add Entity Model Features and Entity Texture Features.'],
     ...(MD.modelCount() ? [['Add the models mod', 'Put the BlockGraph Models jar and Fabric API in .minecraft/mods.']] : []),
     ['Drop the zips in', 'Shader pack into .minecraft/shaderpacks, resource pack into .minecraft/resourcepacks. Leave them zipped.'],
     ['Turn on the textures', 'Options → Resource Packs, move your pack to the right side and press Done.'],
@@ -1411,9 +1560,10 @@ function openWhy() {
   lim.append(el('h3', null, 'What this first version leaves out'));
   const ul = el('ul');
   for (const t of [
-    'Shadows, reflections and volumetric light. Those need extra passes that are not wired up yet.',
+    'Screen-space reflections, coloured shadows and volumetric light. Those need extra passes that are not wired up yet.',
     'From Unity: Sub Graphs, matrix nodes, cubemap asset nodes, parallax mapping and object or reflection probe data. Minecraft has no objects or probes to feed those. (3D models do work, through the Models tab and its mod.)',
-    'Entities, the sky and particles keep a simple vanilla-style shader. The graphs cover blocks and the screen.',
+    'The sky, clouds and particles keep a simple vanilla-style shader. The graphs cover blocks, items, mobs, block entities and the screen.',
+    'Mob animations move the parts every mob already has. New body shapes come from the Models tab, or a model editor such as Blockbench.',
     'The preview imitates Minecraft lighting with a small scene. In game, your resource pack and lightmap are used.',
   ]) ul.append(el('li', null, t));
   lim.append(ul);
@@ -1437,6 +1587,18 @@ function renderPresetMenu() {
     });
     menu.append(b);
   }
+  menu.append(el('div', 'menu-sep'), el('p', 'menu-label', 'Mob animations'));
+  for (const p of ANIM_PRESETS) {
+    const b = el('button', 'menu-item');
+    b.type = 'button';
+    b.setAttribute('role', 'menuitem');
+    b.append(el('strong', null, p.name), el('span', null, p.blurb));
+    b.addEventListener('click', () => {
+      closeMenu();
+      applyAnimPreset(p);
+    });
+    menu.append(b);
+  }
   menu.append(el('div', 'menu-sep'));
   const open = el('button', 'menu-item');
   open.type = 'button';
@@ -1447,8 +1609,10 @@ function renderPresetMenu() {
 }
 
 function applyPreset(p) {
-  state.graphs = withEntityGraph(p.build());
+  const anim = state.graphs.anim;
+  state.graphs = withNewGraphs(p.build());
   for (const g of Object.values(state.graphs)) g.needsLayout = true;
+  if (anim) state.graphs.anim = anim;
   state.presetId = p.id;
   state.views = { ...state.views, terrain: null, entity: null, post: null };
   if (state.kind === 'texture' || state.kind === 'model') switchGraph('terrain');
@@ -1458,6 +1622,23 @@ function applyPreset(p) {
   pushHistory();
   refreshAll();
   toast(`Loaded "${p.name}". Undo brings your old graph back.`);
+}
+
+function applyAnimPreset(p) {
+  state.graphs.anim = { ...p.build(), needsLayout: true };
+  const first = [...compileAnim(state.graphs.anim).mobs.keys()][0];
+  if (first) {
+    $('#an-mob').value = first;
+    preview.animCtl.mob = first;
+  }
+  state.views = { ...state.views, anim: null };
+  if (state.kind !== 'anim') switchGraph('anim');
+  editor.load(currentGraph(), null);
+  requestAnimationFrame(() => editor.frameAll(true));
+  layoutIfNeeded();
+  pushHistory();
+  refreshAll();
+  toast(`Loaded "${p.name}" into Animations. Your shaders are untouched.`);
 }
 
 function toggleMenu() {
@@ -1557,6 +1738,34 @@ function bindUI() {
   post.addEventListener('change', () => { preview.postEnabled = post.checked; });
   $('#pv-reset').addEventListener('click', () => preview.resetCamera());
 
+  // Animations preview controls
+  const mobSel = $('#an-mob');
+  for (const id of MOB_IDS) {
+    const o = el('option', null, MOBS[id].label);
+    o.value = id;
+    mobSel.append(o);
+  }
+  mobSel.value = preview.animCtl.mob;
+  mobSel.addEventListener('change', () => { preview.animCtl.mob = mobSel.value; });
+  const walk = $('#an-walk');
+  const walkOut = $('#an-walk-out');
+  const showWalk = () => {
+    const v = Number(walk.value);
+    walkOut.textContent = v < 0.05 ? 'Standing' : v < 0.5 ? 'Walking' : v < 0.85 ? 'Fast walk' : 'Sprinting';
+    preview.animCtl.walk = v;
+  };
+  walk.addEventListener('input', showWalk);
+  walk.value = String(preview.animCtl.walk);
+  showWalk();
+  $('#an-attack').addEventListener('click', () => preview.animSim.attack());
+  $('#an-hurt').addEventListener('click', () => preview.animSim.hurt());
+  $('#an-jump').addEventListener('click', () => preview.animSim.jump());
+  for (const [id, key] of [['#an-sneak', 'sneak'], ['#an-angry', 'angry'], ['#an-water', 'water'], ['#an-look', 'look']]) {
+    const cb = $(id);
+    cb.checked = !!preview.animCtl[key];
+    cb.addEventListener('change', () => { preview.animCtl[key] = cb.checked; });
+  }
+
   $('#file-input').addEventListener('change', async (e) => {
     const f = e.target.files?.[0];
     e.target.value = '';
@@ -1564,7 +1773,7 @@ function bindUI() {
     try {
       const d = JSON.parse(await f.text());
       if (!validGraphs(d.graphs)) throw new Error('not a BlockGraph file');
-      state.graphs = withEntityGraph(d.graphs);
+      state.graphs = withNewGraphs(d.graphs);
       state.packName = d.packName || state.packName;
       state.textures = Array.isArray(d.textures) ? d.textures : [];
       state.texNext = Math.max(d.texNext || 1, state.textures.length + 1);

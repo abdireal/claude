@@ -22,10 +22,13 @@
         <span class="tab-name">Blocks</span><span class="tab-badge" hidden></span>
       </button>
       <button class="graph-tab" role="tab" type="button" data-kind="entity" id="tab-entity" title="Held items, dropped items, mobs, players, chests and signs">
-        <span class="tab-name">Items<span class="hide-sm"> &amp; Entities</span></span><span class="tab-badge" hidden></span>
+        <span class="tab-name">Items<span class="hide-md"> &amp; Entities</span></span><span class="tab-badge" hidden></span>
       </button>
       <button class="graph-tab" role="tab" type="button" data-kind="post" id="tab-post">
         <span class="tab-name">Post FX</span><span class="tab-badge" hidden></span>
+      </button>
+      <button class="graph-tab" role="tab" type="button" data-kind="anim" id="tab-anim" title="Mob animations: walking, idling, attacking">
+        <span class="tab-name">Anim<span class="hide-md">ations</span></span><span class="tab-badge" hidden></span>
       </button>
       <button class="graph-tab" role="tab" type="button" data-kind="texture" id="tab-texture">
         <span class="tab-name">Textures</span><span class="tab-badge" hidden></span>
@@ -158,6 +161,23 @@
       <div class="preview-wrap">
         <canvas id="preview" aria-label="3D preview of blocks with your shader. Drag to orbit, scroll to zoom."></canvas>
         <p class="preview-msg" id="preview-msg" hidden></p>
+      </div>
+      <div class="anim-controls" id="anim-controls" hidden>
+        <div class="an-row">
+          <label class="an-mob" for="an-mob"><span>Mob</span><select id="an-mob" class="in-select small"></select></label>
+          <div class="an-actions" role="group" aria-label="Make the mob act">
+            <button class="btn ghost small" id="an-attack" type="button">Attack</button>
+            <button class="btn ghost small" id="an-hurt" type="button">Hurt</button>
+            <button class="btn ghost small" id="an-jump" type="button">Jump</button>
+          </div>
+        </div>
+        <label class="pv-row" for="an-walk"><span>Walk</span><input type="range" id="an-walk" min="0" max="1" step="0.01" value="0.6"><output id="an-walk-out" for="an-walk"></output></label>
+        <div class="an-toggles">
+          <label class="ctl-switch small"><input type="checkbox" id="an-sneak"><span class="switch"></span><span>Sneak</span></label>
+          <label class="ctl-switch small"><input type="checkbox" id="an-angry"><span class="switch"></span><span>Angry</span></label>
+          <label class="ctl-switch small"><input type="checkbox" id="an-water"><span class="switch"></span><span>In water</span></label>
+          <label class="ctl-switch small"><input type="checkbox" id="an-look"><span class="switch"></span><span>Look around</span></label>
+        </div>
       </div>
       <div class="preview-controls">
         <label class="pv-row" for="pv-time"><span>Time</span><input type="range" id="pv-time" min="0" max="1" step="0.005" value="0.15"><output id="pv-time-out" for="pv-time"></output></label>

@@ -4,10 +4,13 @@
 // (GLSL 330 compatibility), so they must stay valid in both: always write float
 // literals with a decimal point and never mix int and float maths.
 
+import { MOB_LABELS, ALL_PARTS, partNames, mobByLabel } from './mobs.js';
+
 export const TYPE_RANK = { float: 1, vec2: 2, vec3: 3, vec4: 4 };
 
 export const CATEGORIES = [
   { id: 'Input', label: 'World' },
+  { id: 'Motion', label: 'Mob motion' },
   { id: 'Screen', label: 'Screen' },
   { id: 'Settings', label: 'Values & settings' },
   { id: 'Math', label: 'Math' },
@@ -1897,6 +1900,308 @@ def({
   },
 });
 
+// ------------------------------------------------------------- Animations
+// Nodes for the Animations graph. Instead of GLSL they build OptiFine CEM
+// animation expressions (cem), which Entity Model Features runs in game.
+// Angles are in degrees and distances in model pixels (1/16 block).
+
+const anim = (d) => def({ graphs: ['anim'], width: 180, ...d });
+const STATE_VARS = {
+  'On ground': 'is_on_ground', 'In water': 'is_in_water', 'Wet (rain or water)': 'is_wet', 'Sneaking': 'is_sneaking',
+  'Sprinting': 'is_sprinting', 'Jumping': 'is_jumping', 'Swimming': 'is_swimming', 'Climbing': 'is_climbing',
+  'Riding': 'is_riding', 'Being ridden': 'is_ridden', 'Baby': 'is_child', 'Aggressive': 'is_aggressive',
+  'Hurt': 'is_hurt', 'Burning': 'is_burning', 'Blocking with shield': 'is_blocking', 'Using an item': 'is_using_item',
+  'Holding item (right hand)': 'is_holding_item_right', 'Holding item (left hand)': 'is_holding_item_left',
+  'Sitting': 'is_sitting', 'Tamed': 'is_tamed', 'Invisible': 'is_invisible',
+};
+
+anim({
+  type: 'animWalk', title: 'Walk Cycle', cat: 'Motion', width: 190,
+  desc: 'How the mob walks. Cycle counts up while it moves (limb_swing), Speed is 0 standing still and 1 sprinting (limb_speed). Leg Swing is the wave vanilla legs follow.',
+  keywords: 'walk run limb swing speed legs step cycle gait',
+  outputs: [
+    { id: 'swing', name: 'Leg Swing', type: 'float' },
+    { id: 'opp', name: 'Opposite Swing', type: 'float' },
+    { id: 'speed', name: 'Speed', type: 'float' },
+    { id: 'cycle', name: 'Cycle', type: 'float' },
+  ],
+  cem: () => ({ out: { swing: 'cos(limb_swing*0.6662)*limb_speed', opp: 'cos(limb_swing*0.6662+pi)*limb_speed', speed: 'limb_speed', cycle: 'limb_swing' } }),
+});
+
+anim({
+  type: 'animLook', title: 'Head Look', cat: 'Motion',
+  desc: 'Where the mob looks, in degrees: Yaw turns left and right, Pitch looks up and down (head_yaw, head_pitch).',
+  keywords: 'head look yaw pitch turn aim face',
+  outputs: [{ id: 'yaw', name: 'Yaw°', type: 'float' }, { id: 'pitch', name: 'Pitch°', type: 'float' }],
+  cem: () => ({ out: { yaw: 'head_yaw', pitch: 'head_pitch' } }),
+});
+
+anim({
+  type: 'animTime', title: 'Age & Time', cat: 'Motion',
+  desc: 'Seconds and ticks since the mob appeared (age). Feed it into Wave or Keyframes for idle loops like breathing.',
+  keywords: 'time age seconds ticks clock idle loop frame',
+  outputs: [
+    { id: 'sec', name: 'Seconds', type: 'float' },
+    { id: 'ticks', name: 'Ticks', type: 'float' },
+    { id: 'frame', name: 'Frame Time', type: 'float' },
+  ],
+  cem: () => ({ out: { sec: 'age/20', ticks: 'age', frame: 'frame_time' } }),
+});
+
+anim({
+  type: 'animAttack', title: 'Attack', cat: 'Motion',
+  desc: 'The attack swing: Progress runs 0 → 1 during a hit (swing_progress). Arc goes up and back down, handy for a punch.',
+  keywords: 'attack swing hit punch melee arm',
+  outputs: [
+    { id: 'arc', name: 'Arc', type: 'float' },
+    { id: 'progress', name: 'Progress', type: 'float' },
+    { id: 'active', name: 'Attacking', type: 'float' },
+  ],
+  cem: () => ({ out: { arc: 'sin(swing_progress*pi)', progress: 'swing_progress', active: 'if(swing_progress>0,1,0)' } }),
+});
+
+anim({
+  type: 'animHurt', title: 'Hurt & Health', cat: 'Motion',
+  desc: 'Hurt is 1 right after taking damage and fades to 0 (hurt_time). Dying runs 0 → 1. Health is the fraction of health left.',
+  keywords: 'hurt damage hit death die health flinch',
+  outputs: [
+    { id: 'hurt', name: 'Hurt', type: 'float' },
+    { id: 'death', name: 'Dying', type: 'float' },
+    { id: 'health', name: 'Health', type: 'float' },
+  ],
+  cem: () => ({ out: { hurt: 'hurt_time/10', death: 'death_time/20', health: 'health/max(max_health,1)' } }),
+});
+
+anim({
+  type: 'animState', title: 'Mob State', cat: 'Motion', width: 200,
+  desc: '1 while the mob is in this state, otherwise 0. Run it through Smooth to blend poses in and out.',
+  keywords: 'state ground water sneak sprint jump swim climb ride baby aggressive burning blocking sitting',
+  params: [{ id: 'state', name: 'State', kind: 'select', def: 'On ground', options: Object.keys(STATE_VARS) }],
+  outputs: [{ id: 'out', name: 'Is', type: 'float' }],
+  cem: ({ P }) => `if(${STATE_VARS[P.state] || 'is_on_ground'},1,0)`,
+});
+
+anim({
+  type: 'animMove', title: 'Move Direction', cat: 'Motion',
+  desc: 'Which way the mob walks compared with where it looks: Forward is 1 walking ahead and -1 backing up, Strafe is 1 walking right (EMF).',
+  keywords: 'move direction forward backward strafe sideways',
+  outputs: [{ id: 'fwd', name: 'Forward', type: 'float' }, { id: 'strafe', name: 'Strafe', type: 'float' }],
+  cem: () => ({ out: { fwd: 'move_forward', strafe: 'move_strafing' } }),
+});
+
+anim({
+  type: 'animVanilla', title: 'Vanilla Pose', cat: 'Motion', width: 190,
+  desc: 'How Minecraft itself posed this part this frame, before your animation. Rotation in degrees, position in pixels.',
+  keywords: 'vanilla pose default original rotation part read',
+  params: [{ id: 'part', name: 'Part', kind: 'select', def: 'head', options: ALL_PARTS }],
+  outputs: [
+    { id: 'rx', name: 'Rot X°', type: 'float' }, { id: 'ry', name: 'Rot Y°', type: 'float' }, { id: 'rz', name: 'Rot Z°', type: 'float' },
+    { id: 'tx', name: 'Pos X', type: 'float' }, { id: 'ty', name: 'Pos Y', type: 'float' }, { id: 'tz', name: 'Pos Z', type: 'float' },
+  ],
+  cem: ({ P, V }) => {
+    const part = ALL_PARTS.includes(P.part) ? P.part : 'head';
+    const set = ['rx', 'ry', 'rz'].map((c) => [`${V}_${c}`, `todeg(${part}.${c})`])
+      .concat(['tx', 'ty', 'tz'].map((c) => [`${V}_${c}`, `${part}.${c}`]));
+    return { set, out: Object.fromEntries(['rx', 'ry', 'rz', 'tx', 'ty', 'tz'].map((c) => [c, `${V}_${c}`])) };
+  },
+});
+
+anim({
+  type: 'animRandom', title: 'Per-Mob Random', cat: 'Motion',
+  desc: 'A random number from 0 to 1 that stays the same for each mob, so a crowd does not move in sync. Change Seed for another number.',
+  keywords: 'random variety offset seed unique per entity',
+  params: [{ id: 'seed', name: 'Seed', kind: 'number', def: 1, step: 1 }],
+  outputs: [{ id: 'out', name: 'Random', type: 'float' }],
+  cem: ({ P }) => `random(id+${Math.round(Number(P.seed) || 0) * 97})`,
+});
+
+anim({
+  type: 'animNumber', title: 'Number', cat: 'Math', width: 150,
+  desc: 'A fixed number.',
+  keywords: 'number constant value float',
+  params: [{ id: 'value', name: 'Value', kind: 'number', def: 1, step: 0.1 }],
+  outputs: [{ id: 'out', name: 'Value', type: 'float' }],
+  cem: ({ P }) => numLit(P.value),
+});
+
+const numLit = (v) => {
+  const x = Number(v);
+  if (!Number.isFinite(x)) return '0';
+  const t = String(Number(x.toFixed(4)));
+  return x < 0 ? `(${t})` : t;
+};
+const animBinary = (type, title, desc, op, defB, keywords) => anim({
+  type, title, cat: 'Math', width: 150, desc, keywords,
+  inputs: [{ id: 'a', name: 'A', type: 'float', def: 0 }, { id: 'b', name: 'B', type: 'float', def: defB }],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  cem: ({ I }) => op(I.a, I.b),
+});
+animBinary('animAdd', 'Add', 'A + B.', (a, b) => `${a}+${b}`, 0, 'plus sum offset');
+animBinary('animSub', 'Subtract', 'A − B.', (a, b) => `${a}-${b}`, 0, 'minus difference');
+animBinary('animMul', 'Multiply', 'A × B. Scales a motion up or down.', (a, b) => `${a}*${b}`, 1, 'times scale amount strength');
+animBinary('animDiv', 'Divide', 'A ÷ B.', (a, b) => `${a}/${b}`, 1, 'over ratio');
+animBinary('animMin', 'Minimum', 'The smaller of A and B.', (a, b) => `min(${a},${b})`, 1, 'smallest limit');
+animBinary('animMax', 'Maximum', 'The larger of A and B.', (a, b) => `max(${a},${b})`, 0, 'largest limit');
+
+const animUnary = (type, title, desc, op, keywords) => anim({
+  type, title, cat: 'Math', width: 150, desc, keywords,
+  inputs: [{ id: 'x', name: 'In', type: 'float', def: 0 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  cem: ({ I }) => op(I.x),
+});
+animUnary('animSin', 'Sine', 'sin(In), In in radians. Use Wave for timed loops.', (x) => `sin(${x})`, 'sine wave trig');
+animUnary('animCos', 'Cosine', 'cos(In), In in radians.', (x) => `cos(${x})`, 'cosine wave trig');
+animUnary('animAbs', 'Absolute', 'Removes the minus sign. Turns a swing into a bounce.', (x) => `abs(${x})`, 'absolute bounce positive');
+animUnary('animNeg', 'Negate', '−In. Flips a motion to the other side.', (x) => `-${x}`, 'negate flip invert opposite mirror');
+animUnary('animFrac', 'Fraction', 'The part after the decimal point. Makes a 0 → 1 ramp that repeats.', (x) => `frac(${x})`, 'fraction repeat sawtooth loop');
+
+anim({
+  type: 'animClamp', title: 'Clamp', cat: 'Math', width: 160,
+  desc: 'Keeps In between Min and Max, so a joint never bends too far.',
+  keywords: 'clamp limit range restrict',
+  inputs: [{ id: 'x', name: 'In', type: 'float', def: 0 }, { id: 'lo', name: 'Min', type: 'float', def: -45 }, { id: 'hi', name: 'Max', type: 'float', def: 45 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  cem: ({ I }) => `clamp(${I.x},${I.lo},${I.hi})`,
+});
+
+anim({
+  type: 'animMix', title: 'Mix', cat: 'Math', width: 160,
+  desc: 'Blends from A (T = 0) to B (T = 1). Mix two poses by a state.',
+  keywords: 'lerp mix blend interpolate',
+  inputs: [{ id: 'a', name: 'A', type: 'float', def: 0 }, { id: 'b', name: 'B', type: 'float', def: 1 }, { id: 't', name: 'T', type: 'float', def: 0.5 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  cem: ({ I }) => `lerp(${I.t},${I.a},${I.b})`,
+});
+
+anim({
+  type: 'animRemap', title: 'Remap', cat: 'Math', width: 170,
+  desc: 'Maps In from one range to another, for example walk speed 0–1 to a lean of 0–15 degrees.',
+  keywords: 'remap range map scale convert',
+  inputs: [
+    { id: 'x', name: 'In', type: 'float', def: 0 },
+    { id: 'a', name: 'From Min', type: 'float', def: 0 }, { id: 'b', name: 'From Max', type: 'float', def: 1 },
+    { id: 'c', name: 'To Min', type: 'float', def: 0 }, { id: 'd', name: 'To Max', type: 'float', def: 15 },
+  ],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  cem: ({ I }) => `${I.c}+(${I.x}-${I.a})*(${I.d}-${I.c})/(${I.b}-${I.a})`,
+});
+
+anim({
+  type: 'animWave', title: 'Wave', cat: 'Trig', width: 180,
+  desc: 'A smooth back-and-forth: Amount × sin. Time defaults to seconds since the mob appeared, so it loops by itself; wire Walk Cycle in to swing with steps.',
+  keywords: 'wave sine loop idle breathe bob sway oscillate',
+  inputs: [
+    { id: 't', name: 'Time', type: 'float', def: 0, defExpr: 'age/20', defLabel: 'Seconds' },
+    { id: 'speed', name: 'Cycles per sec', type: 'float', def: 0.5 },
+    { id: 'amp', name: 'Amount', type: 'float', def: 5 },
+    { id: 'phase', name: 'Offset (0–1)', type: 'float', def: 0 },
+  ],
+  outputs: [{ id: 'out', name: 'Wave', type: 'float' }],
+  cem: ({ I }) => `sin((${I.t}*${I.speed}+${I.phase})*2*pi)*${I.amp}`,
+});
+
+const EASES = {
+  'Sine in-out': 'easeinoutsine', 'Sine in': 'easeinsine', 'Sine out': 'easeoutsine', 'Quad in-out': 'easeinoutquad',
+  'Cubic in-out': 'easeinoutcubic', 'Back out (overshoot)': 'easeoutback', 'Bounce out': 'easeoutbounce',
+  'Elastic out': 'easeoutelastic', 'Expo in-out': 'easeinoutexpo',
+};
+anim({
+  type: 'animEase', title: 'Ease', cat: 'Trig', width: 200,
+  desc: 'Goes from A to B as T runs 0 → 1, along an easing curve (EMF easing functions). Bounce and Back give cartoony motion.',
+  keywords: 'ease easing curve tween smooth bounce elastic overshoot',
+  params: [{ id: 'curve', name: 'Curve', kind: 'select', def: 'Sine in-out', options: Object.keys(EASES) }],
+  inputs: [{ id: 't', name: 'T', type: 'float', def: 0 }, { id: 'a', name: 'A', type: 'float', def: 0 }, { id: 'b', name: 'B', type: 'float', def: 30 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  cem: ({ I, P }) => `${EASES[P.curve] || 'easeinoutsine'}(clamp(${I.t},0,1),${I.a},${I.b})`,
+});
+
+anim({
+  type: 'animKeyframes', title: 'Keyframes', cat: 'Trig', width: 200,
+  desc: 'Steps through a list of values, blending between them. Frame counts 0, 1, 2…; by default 4 keyframes play per second. Loop repeats them (EMF keyframe functions).',
+  keywords: 'keyframe keyframes timeline sequence frames clip',
+  params: [
+    { id: 'values', name: 'Values', kind: 'text', def: '0, 20, 0, -20' },
+    { id: 'loop', name: 'Loop', kind: 'bool', def: true },
+  ],
+  inputs: [{ id: 't', name: 'Frame', type: 'float', def: 0, defExpr: 'age/5', defLabel: '4 per second' }],
+  outputs: [{ id: 'out', name: 'Value', type: 'float' }],
+  cem: ({ I, P }) => {
+    const vals = String(P.values || '0').split(',').map((x) => numLit(x.trim())).filter((x) => x !== '').slice(0, 64);
+    return `${P.loop === false ? 'keyframe' : 'keyframeloop'}(${I.t},${(vals.length ? vals : ['0']).join(',')})`;
+  },
+});
+
+anim({
+  type: 'animSmooth', title: 'Smooth', cat: 'Trig', width: 170,
+  desc: 'Follows In smoothly over time instead of snapping. Speed 8 settles in about a quarter second. Great for blending into sneak or swim poses.',
+  keywords: 'smooth damp follow blend transition lag inertia',
+  inputs: [{ id: 'x', name: 'In', type: 'float', def: 0 }, { id: 'speed', name: 'Speed', type: 'float', def: 8 }],
+  outputs: [{ id: 'out', name: 'Smoothed', type: 'float' }],
+  cem: ({ I, V }) => ({ set: [[V, `${V}+(${I.x}-${V})*clamp(frame_time*${I.speed},0,1)`]], out: { out: V } }),
+});
+
+anim({
+  type: 'animTimer', title: 'Timer', cat: 'Trig', width: 170,
+  desc: 'Seconds that When has been above 0.5, back to 0 when it drops. Start an animation the moment a state begins.',
+  keywords: 'timer counter since duration elapsed stopwatch',
+  inputs: [{ id: 'when', name: 'When', type: 'float', def: 1 }],
+  outputs: [{ id: 'out', name: 'Seconds', type: 'float' }],
+  cem: ({ I, V }) => ({ set: [[V, `if(${I.when}>0.5,${V}+frame_time,0)`]], out: { out: V } }),
+});
+
+const COMPARE = { '>': '>', '<': '<', '≥': '>=', '≤': '<=', '=': '==', '≠': '!=' };
+anim({
+  type: 'animCompare', title: 'Compare', cat: 'Logic', width: 160,
+  desc: '1 when the comparison is true, otherwise 0.',
+  keywords: 'compare greater less equal if test',
+  params: [{ id: 'op', name: 'Test', kind: 'select', def: '>', options: Object.keys(COMPARE) }],
+  inputs: [{ id: 'a', name: 'A', type: 'float', def: 0 }, { id: 'b', name: 'B', type: 'float', def: 0.5 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  cem: ({ I, P }) => `if(${I.a}${COMPARE[P.op] || '>'}${I.b},1,0)`,
+});
+
+anim({
+  type: 'animBranch', title: 'Branch', cat: 'Logic', width: 160,
+  desc: 'True when Predicate is above 0.5, else False. Pick between two motions.',
+  keywords: 'branch if else switch select condition',
+  inputs: [{ id: 'p', name: 'Predicate', type: 'float', def: 0 }, { id: 'a', name: 'True', type: 'float', def: 1 }, { id: 'b', name: 'False', type: 'float', def: 0 }],
+  outputs: [{ id: 'out', name: 'Out', type: 'float' }],
+  cem: ({ I }) => `if(${I.p}>0.5,${I.a},${I.b})`,
+});
+animBinary('animAnd', 'And', '1 when both A and B are 1.', (a, b) => `min(${a},${b})`, 1, 'and both');
+NODE_DEFS.animAnd.cat = 'Logic';
+animBinary('animOr', 'Or', '1 when A or B is 1.', (a, b) => `max(${a},${b})`, 0, 'or either');
+NODE_DEFS.animOr.cat = 'Logic';
+animUnary('animNot', 'Not', '1 − In: 1 becomes 0 and 0 becomes 1.', (x) => `1-${x}`, 'not invert opposite');
+NODE_DEFS.animNot.cat = 'Logic';
+
+anim({
+  type: 'animPart', title: 'Animate Part', cat: 'Output', width: 220, animSink: true,
+  desc: 'Moves one body part of a mob. Add to vanilla keeps Minecraft’s own motion and adds yours; Replace vanilla ignores it. Inputs you leave alone are not touched. Rotation in degrees, movement in pixels (16 per block).',
+  keywords: 'animate part output bone rotate move scale hide joint limb',
+  params: [
+    { id: 'mob', name: 'Mob', kind: 'select', def: 'Zombie', options: MOB_LABELS },
+    { id: 'part', name: 'Part', kind: 'select', def: 'head', options: (P) => partNames(mobByLabel(P.mob) || 'zombie') },
+    { id: 'mode', name: 'Mode', kind: 'select', def: 'Add to vanilla', options: ['Add to vanilla', 'Replace vanilla'] },
+  ],
+  onParamChange(params, id) {
+    if (id !== 'mob') return;
+    const parts = partNames(mobByLabel(params.mob) || 'zombie');
+    if (!parts.includes(params.part)) params.part = parts[0];
+  },
+  inputs: [
+    { id: 'rx', name: 'Rotate X° (nod)', type: 'float', def: 0 },
+    { id: 'ry', name: 'Rotate Y° (turn)', type: 'float', def: 0 },
+    { id: 'rz', name: 'Rotate Z° (tilt)', type: 'float', def: 0 },
+    { id: 'tx', name: 'Move right', type: 'float', def: 0 },
+    { id: 'ty', name: 'Move up', type: 'float', def: 0 },
+    { id: 'tz', name: 'Move forward', type: 'float', def: 0 },
+    { id: 'scale', name: 'Scale', type: 'float', def: 1 },
+    { id: 'show', name: 'Visible', type: 'float', def: 1 },
+  ],
+  cem: () => ({ out: {} }),
+});
+
 // ----------------------------------------------------------------- Utility
 
 def({
@@ -1931,6 +2236,7 @@ def({
   inputs: [{ id: 'x', name: 'In', type: 'dyn', def: 0 }],
   outputs: [{ id: 'out', name: 'Out', type: 'dyn' }],
   gen: ({ I }) => I.x,
+  cem: ({ I }) => I.x,
 });
 
 def({
@@ -1995,9 +2301,11 @@ def({
 // settings make no sense inside a baked texture.
 for (const t of ['time', 'world', 'sunSky', 'camera', 'wave', 'slider', 'toggle', 'choice']) NODE_DEFS[t].noTexture = true;
 
-// Can this node be used in a graph of this kind ('terrain', 'post' or 'texture')?
+// Can this node be used in a graph of this kind ('terrain', 'entity', 'post',
+// 'texture' or 'anim')? Animation graphs only take nodes that build CEM.
 export function allowedIn(def, kind) {
   if (!def || def.isOutput) return false;
+  if (kind === 'anim') return !!def.cem || !!def.isNote;
   if (def.graphs) return def.graphs.includes(kind);
   return kind !== 'texture' || !def.noTexture;
 }
