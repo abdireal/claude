@@ -378,6 +378,8 @@ export class GraphEditor {
       if (ip.bind) {
         const b = BINDS[this.kind]?.[ip.bind];
         if (b) port.append(el('span', 'port-hint', b.label));
+      } else if (ip.defLabel) {
+        port.append(el('span', 'port-hint', ip.defLabel));
       } else {
         const v = n.defaults?.[ip.id] ?? ip.def;
         const isFloat = !Array.isArray(v) && (ip.type === 'float' || ip.type === 'dyn' || ip.type === 'dynOrFloat');
@@ -500,7 +502,8 @@ export class GraphEditor {
       } else if (p.kind === 'select') {
         const s = el('select', 'ctl-select');
         s.setAttribute('aria-label', p.name);
-        for (const o of p.options) {
+        // Options can depend on other params (an Animate Part's parts follow its mob).
+        for (const o of typeof p.options === 'function' ? p.options(P) : p.options) {
           const opt = el('option', null, o);
           opt.value = o;
           s.append(opt);
@@ -508,6 +511,10 @@ export class GraphEditor {
         s.value = P[p.id];
         s.addEventListener('change', () => {
           n.params[p.id] = s.value;
+          if (def.onParamChange) {
+            def.onParamChange(n.params, p.id);
+            this.render();
+          }
           commit(false);
         });
         const row = el('label', 'ctl-select-row');
@@ -523,6 +530,18 @@ export class GraphEditor {
           commit(false);
         });
         row.append(cb, el('span', 'switch'), el('span', null, p.name));
+        wrap.append(row);
+      } else if (p.kind === 'text') {
+        const input = el('input', 'ctl-num ctl-text');
+        input.value = P[p.id];
+        input.spellcheck = false;
+        input.setAttribute('aria-label', p.name);
+        input.addEventListener('change', () => {
+          n.params[p.id] = input.value;
+          commit(false);
+        });
+        const row = el('label', 'ctl-select-row');
+        row.append(el('span', null, p.name), input);
         wrap.append(row);
       } else if (p.kind === 'swizzle') {
         const input = el('input', 'ctl-num');

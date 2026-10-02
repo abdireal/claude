@@ -3,6 +3,8 @@
 // mobs and chests → water → hand → post.
 
 import { SHADOW_DEFAULTS } from './targets.js';
+import { MOBS, vanillaPose } from './mobs.js';
+import { AnimSim } from './anim.js';
 
 // ------------------------------------------------------------------ math
 
@@ -12,6 +14,9 @@ const m4 = {
   },
   scale(k) {
     return new Float32Array([k, 0, 0, 0, 0, k, 0, 0, 0, 0, k, 0, 0, 0, 0, 1]);
+  },
+  scale3(x, y, z) {
+    return new Float32Array([x, 0, 0, 0, 0, y, 0, 0, 0, 0, z, 0, 0, 0, 0, 1]);
   },
   rotX(a) {
     const c = Math.cos(a), s = Math.sin(a);
@@ -105,6 +110,8 @@ const TILE = {
   grassTop: 0, grassSide: 1, dirt: 2, stone: 3, logSide: 4, logTop: 5, leaves: 6, shortGrass: 7, poppy: 8, water: 9, sand: 10,
   glowstone: 11, diamond: 12, sword: 13, shield: 14, chestSide: 15, chestFront: 16, chestTop: 17,
   zSkin: 18, zFace: 19, zShirt: 20, zPants: 21,
+  pSkin: 22, pFace: 23, pHair: 24, pShirt: 25, pPants: 26, bone: 27, skull: 28, creeper: 29, creeperFace: 30,
+  pig: 31, pigFace: 32, pigSnout: 33, cow: 34, cowFace: 35, horn: 36, wool: 37, sheepFace: 38, sheepLeg: 39,
 };
 const ATLAS_TILES = 8;
 const TILE_PX = 64;
@@ -278,6 +285,66 @@ function buildAtlas() {
   r = rng(54);
   for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) put(TILE.zPants, x, y, pick(r, ['#3b3f99', '#34388a', '#4347a8']));
 
+  // Mobs for the Animations preview: a player, a skeleton, a creeper, a pig, a cow and a sheep.
+  const fill = (tile, colors, seed) => {
+    const rr = rng(seed);
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) put(tile, x, y, pick(rr, colors));
+  };
+  const dots = (tile, color, list) => { for (const [x, y] of list) put(tile, x, y, hex(color)); };
+  const rect = (tile, color, x0, y0, x1, y1) => { for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) put(tile, x, y, hex(color)); };
+  const SKIN = ['#c58c6a', '#bd8263', '#cc9573'];
+  fill(TILE.pSkin, SKIN, 61);
+  fill(TILE.pFace, SKIN, 62);
+  rect(TILE.pFace, '#4a3021', 0, 0, 15, 3);
+  dots(TILE.pFace, '#4a3021', [[0, 4], [15, 4], [0, 5], [15, 5]]);
+  dots(TILE.pFace, '#ffffff', [[3, 8], [4, 8], [11, 8], [12, 8]]);
+  dots(TILE.pFace, '#4b3a9e', [[4, 8], [11, 8]]);
+  rect(TILE.pFace, '#8a4f3c', 6, 11, 9, 11);
+  fill(TILE.pHair, ['#4a3021', '#3f281b', '#553826'], 63);
+  fill(TILE.pShirt, ['#00a8a8', '#009999', '#13b5b5'], 64);
+  fill(TILE.pPants, ['#3c3cb4', '#3333a3', '#4646c2'], 65);
+  const BONE = ['#c8c8c8', '#b9b9b9', '#d6d6d6'];
+  fill(TILE.bone, BONE, 66);
+  for (let y = 1; y < 16; y += 3) rect(TILE.bone, '#8f8f8f', 2, y, 13, y);
+  fill(TILE.skull, BONE, 67);
+  rect(TILE.skull, '#3a3a3a', 3, 6, 5, 8);
+  rect(TILE.skull, '#3a3a3a', 10, 6, 12, 8);
+  rect(TILE.skull, '#5a5a5a', 7, 10, 8, 10);
+  for (let x = 4; x <= 11; x += 2) put(TILE.skull, x, 13, hex('#6a6a6a'));
+  const GREEN = ['#4caf3c', '#3e8f32', '#62c552', '#2e6f26', '#57b847'];
+  fill(TILE.creeper, GREEN, 68);
+  fill(TILE.creeperFace, GREEN, 69);
+  rect(TILE.creeperFace, '#101010', 3, 4, 6, 7);
+  rect(TILE.creeperFace, '#101010', 9, 4, 12, 7);
+  rect(TILE.creeperFace, '#101010', 6, 8, 9, 11);
+  rect(TILE.creeperFace, '#101010', 4, 10, 5, 14);
+  rect(TILE.creeperFace, '#101010', 10, 10, 11, 14);
+  const PINK = ['#f0a8a8', '#e89a9a', '#f4b6b6'];
+  fill(TILE.pig, PINK, 70);
+  fill(TILE.pigFace, PINK, 71);
+  dots(TILE.pigFace, '#ffffff', [[2, 6], [13, 6]]);
+  dots(TILE.pigFace, '#1a1a1a', [[3, 6], [12, 6]]);
+  fill(TILE.pigSnout, ['#e07f8a', '#d9737e'], 72);
+  rect(TILE.pigSnout, '#8a3a44', 3, 6, 5, 9);
+  rect(TILE.pigSnout, '#8a3a44', 10, 6, 12, 9);
+  fill(TILE.cow, ['#4a3020', '#3f2819', '#54382a'], 73);
+  const rc = rng(74);
+  for (let i = 0; i < 5; i++) {
+    const cx = Math.floor(rc() * 14), cy = Math.floor(rc() * 14), w = 2 + Math.floor(rc() * 4), h = 2 + Math.floor(rc() * 3);
+    rect(TILE.cow, '#e8e8e8', cx, cy, Math.min(15, cx + w), Math.min(15, cy + h));
+  }
+  fill(TILE.cowFace, ['#4a3020', '#3f2819'], 75);
+  rect(TILE.cowFace, '#e8e8e8', 5, 0, 10, 15);
+  dots(TILE.cowFace, '#101010', [[3, 6], [12, 6]]);
+  rect(TILE.cowFace, '#c9a08a', 4, 11, 11, 15);
+  fill(TILE.horn, ['#d8d0b8', '#cfc6ac'], 76);
+  fill(TILE.wool, ['#f2f2f2', '#e6e6e6', '#ffffff', '#dcdcdc'], 77);
+  fill(TILE.sheepFace, ['#d9b9a2', '#cfae96'], 78);
+  dots(TILE.sheepFace, '#ffffff', [[3, 6], [12, 6]]);
+  dots(TILE.sheepFace, '#1a1a1a', [[4, 6], [11, 6]]);
+  rect(TILE.sheepFace, '#b88d7a', 6, 10, 9, 11);
+  fill(TILE.sheepLeg, ['#d9b9a2', '#cfae96'], 79);
+
   return { data, size };
 }
 
@@ -422,9 +489,44 @@ function buildScene() {
 // --------------------------------------------------------------- shaders
 
 // --------------------------------------------------------------- entities
-// Box models for the Items & Entities preview: a chest (block entity), a
-// zombie (hostile mob), and a sword and shield held in first person. They use
-// the same vertex layout as blocks.
+// Box models for the Items & Entities preview: a chest (block entity), the
+// animated mobs (see mobs.js), and a sword and shield held in first person.
+// They use the same vertex layout as blocks.
+
+// One mesh per mob part, in model pixels with y pointing down (Minecraft's
+// ModelPart space). The faces carry vanilla-style shading in their colour.
+function buildMobMeshes(mob) {
+  const tileUV = (t) => [(t % ATLAS_TILES) / ATLAS_TILES, Math.floor(t / ATLAS_TILES) / ATLAS_TILES];
+  const eps = 0.0008;
+  const S = 1 / ATLAS_TILES;
+  const quad = (arr, c, n, tile, shade) => {
+    const [u0, v0] = tileUV(tile);
+    const uvs = [[0, 0], [0, 1], [1, 1], [1, 0]];
+    for (const i of [0, 1, 2, 0, 2, 3]) {
+      const p = c[i];
+      arr.push(p[0], p[1], p[2], n[0], n[1], n[2],
+        u0 + eps + uvs[i][0] * (S - 2 * eps), v0 + eps + uvs[i][1] * (S - 2 * eps),
+        shade, shade, shade, 1, 0, 1, 0, 0);
+    }
+  };
+  const out = {};
+  for (const [name, part] of Object.entries(MOBS[mob].parts)) {
+    const arr = [];
+    for (const b of part.boxes) {
+      const [x0, y0, z0] = b.from;
+      const [x1, y1, z1] = [x0 + b.size[0], y0 + b.size[1], z0 + b.size[2]];
+      const t = (k) => TILE[b.tiles[k] ?? b.tiles.side];
+      quad(arr, [[x0, y0, z1], [x0, y0, z0], [x1, y0, z0], [x1, y0, z1]], [0, -1, 0], t('top'), 1.0);
+      quad(arr, [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]], [0, 1, 0], t('bottom'), 0.5);
+      quad(arr, [[x1, y0, z0], [x1, y1, z0], [x0, y1, z0], [x0, y0, z0]], [0, 0, -1], t('front'), 0.85);
+      quad(arr, [[x0, y0, z1], [x0, y1, z1], [x1, y1, z1], [x1, y0, z1]], [0, 0, 1], t('back'), 0.85);
+      quad(arr, [[x0, y0, z0], [x0, y1, z0], [x0, y1, z1], [x0, y0, z1]], [-1, 0, 0], t('side'), 0.65);
+      quad(arr, [[x1, y0, z1], [x1, y1, z1], [x1, y1, z0], [x1, y0, z0]], [1, 0, 0], t('side'), 0.65);
+    }
+    out[name] = new Float32Array(arr);
+  }
+  return out;
+}
 
 function buildEntityMeshes() {
   const tileUV = (t) => [(t % ATLAS_TILES) / ATLAS_TILES, Math.floor(t / ATLAS_TILES) / ATLAS_TILES];
@@ -456,15 +558,6 @@ function buildEntityMeshes() {
   const chest = [];
   box(chest, [px(1), 0, px(1)], [px(15), px(14), px(15)], { top: TILE.chestTop, bottom: TILE.chestTop, side: TILE.chestSide, back: TILE.chestSide, front: TILE.chestFront }, [0.8, 1]);
 
-  const zombie = [];
-  const lm = [0, 1];
-  box(zombie, [px(-4), 0, px(-2)], [0, px(12), px(2)], { side: TILE.zPants }, lm);
-  box(zombie, [0, 0, px(-2)], [px(4), px(12), px(2)], { side: TILE.zPants }, lm);
-  box(zombie, [px(-4), px(12), px(-2)], [px(4), px(24), px(2)], { side: TILE.zShirt }, lm);
-  box(zombie, [px(-8), px(20), px(-2)], [px(-4), px(24), px(10)], { side: TILE.zSkin }, lm);
-  box(zombie, [px(4), px(20), px(-2)], [px(8), px(24), px(10)], { side: TILE.zSkin }, lm);
-  box(zombie, [px(-4), px(24), px(-4)], [px(4), px(32), px(4)], { side: TILE.zSkin, front: TILE.zFace }, lm);
-
   // A flat item sprite with a front and a back, like Minecraft's item models.
   const sword = [];
   quad(sword, [[-0.5, 0.5, 0.02], [-0.5, -0.5, 0.02], [0.5, -0.5, 0.02], [0.5, 0.5, 0.02]], [0, 0, 1], TILE.sword, 1.0, [0, 1]);
@@ -475,7 +568,6 @@ function buildEntityMeshes() {
 
   return {
     chest: new Float32Array(chest),
-    zombie: new Float32Array(zombie),
     sword: new Float32Array(sword),
     shield: new Float32Array(shield),
   };
@@ -579,6 +671,14 @@ export class Preview {
     this.autoRotate = !matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.postEnabled = true;
     this.cam = { yaw: 0.85, pitch: 0.42, dist: 11.5, target: [-0.3, 1.2, -0.3] };
+    // Mob animation: the island zombie always runs the Animations graph; in
+    // the Animations tab the camera moves in and the controls drive the mob.
+    this.animProg = null;
+    this.animMode = false;
+    this.animCtl = { mob: 'zombie', walk: 0.6, sneak: false, water: false, angry: false, look: true };
+    this.animSim = new AnimSim();
+    this.worldSim = new AnimSim();
+    this.mobMeshes = {};
     this.start = performance.now();
     this.visible = true;
     const gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: false });
@@ -627,7 +727,6 @@ export class Preview {
     const em = buildEntityMeshes();
     this.entityMeshes = {
       chest: this.makeMesh(em.chest),
-      zombie: this.makeMesh(em.zombie),
       sword: this.makeMesh(em.sword),
       shield: this.makeMesh(em.shield),
     };
@@ -708,6 +807,43 @@ export class Preview {
       result.postError = String(e.message || e);
     }
     return result;
+  }
+
+  setAnimProgram(prog) {
+    this.animProg = prog;
+  }
+
+  // Animations tab: zoom in on the mob and hide the held items.
+  setAnimMode(on) {
+    if (on === this.animMode) return;
+    this.animMode = on;
+    if (on) {
+      this.savedCam = { ...this.cam, target: [...this.cam.target] };
+      Object.assign(this.cam, { target: [1.5, 1.6, 2.5], dist: 5.2, pitch: 0.3 });
+      // Turn the mob to show its face, three-quarters on, to the camera.
+      this.animYaw = Math.atan2(-Math.cos(this.cam.yaw), -Math.sin(this.cam.yaw)) + 0.6;
+    } else if (this.savedCam) {
+      Object.assign(this.cam, this.savedCam);
+    }
+  }
+
+  mobMesh(mob) {
+    if (!this.mobMeshes[mob]) {
+      const m = {};
+      for (const [name, data] of Object.entries(buildMobMeshes(mob))) if (data.length) m[name] = this.makeMesh(data);
+      this.mobMeshes[mob] = m;
+    }
+    return this.mobMeshes[mob];
+  }
+
+  // Advances the animated mob one frame: vanilla pose, then the graph's animation.
+  stepMob(dt) {
+    const anim = this.animMode;
+    const mob = anim ? this.animCtl.mob : 'zombie';
+    const sim = anim ? this.animSim : this.worldSim;
+    const params = sim.step(dt, anim ? this.animCtl : { walk: 0, look: true });
+    const pose = this.animProg ? this.animProg.run(mob, params, sim.vars) : vanillaPose(mob, params);
+    this.mobFrame = { mob, pose, params, jump: sim.jumpHeight || 0 };
   }
 
   setShadows(cfg) {
@@ -834,7 +970,7 @@ export class Preview {
   frame() {
     const gl = this.gl;
     if (!this.terrain || !this.post) return;
-    if (this.autoRotate) this.cam.yaw += 0.0016;
+    if (this.autoRotate && !this.animMode) this.cam.yaw += 0.0016;
     const time = (performance.now() - this.start) / 1000;
     const { yaw, pitch, dist, target } = this.cam;
     const eye = [
@@ -852,6 +988,10 @@ export class Preview {
       fwd: [(target[0] - eye[0]) / fl, (target[1] - eye[1]) / fl, (target[2] - eye[2]) / fl],
     };
     this.lastFrame = f;
+
+    const now = performance.now();
+    this.stepMob(this.lastNow ? (now - this.lastNow) / 1000 : 1 / 60);
+    this.lastNow = now;
 
     this.shadowLive = !!(this.shadow.on && this.terrainShadow);
     if (this.shadowLive) this.renderShadowMap(f);
@@ -909,7 +1049,7 @@ export class Preview {
     gl.depthMask(true);
 
     // first-person items, squeezed into the front of the depth range like Minecraft's hand
-    if (this.entity) {
+    if (this.entity && !this.animMode) {
       gl.depthRange(0, 0.05);
       this.drawEntities(viewProj, f, true, view);
       gl.depthRange(0, 1);
@@ -1212,12 +1352,20 @@ export class Preview {
     const t = f.time;
     if (!hand) {
       set({ mesh: this.entityMeshes.chest, model: m4.translate(0, 1, -3), isBlock: true, blockEntityId: 10101 });
-      const hurt = t % 4 < 0.3;
-      set({
-        mesh: this.entityMeshes.zombie, isEntity: true, entityId: 30002,
-        model: m4.chain(m4.translate(1.5, 1, 2.5), m4.rotY(0.6 + Math.sin(t * 0.7) * 0.15)),
-        flash: hurt ? [1, 0, 0, 0.5] : [0, 0, 0, 0],
-      });
+      const mf = this.mobFrame;
+      if (!mf) return;
+      // Minecraft's entity transform: model pixels, y down, turned to face the yaw.
+      const base = m4.chain(m4.translate(1.5, 1 + 1.501 + mf.jump, 2.5), m4.rotY(this.animMode ? this.animYaw : 0.6), m4.scale3(-1 / 16, -1 / 16, 1 / 16));
+      const meshes = this.mobMesh(mf.mob);
+      const flash = mf.params.hurt_time > 0 ? [1, 0, 0, 0.45] : [0, 0, 0, 0];
+      for (const [name, mesh] of Object.entries(meshes)) {
+        const p = mf.pose[name];
+        if (!p || p.visible === false) continue;
+        set({
+          mesh, isEntity: true, entityId: MOBS[mf.mob].entityId, flash,
+          model: m4.chain(base, m4.translate(p.tx, p.ty, p.tz), m4.rotZ(p.rz), m4.rotY(p.ry), m4.rotX(p.rx), m4.scale3(p.sx, p.sy, p.sz)),
+        });
+      }
       return;
     }
     const camToWorld = m4.invert(view);

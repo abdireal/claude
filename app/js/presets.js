@@ -584,3 +584,120 @@ export const TEXTURE_PRESETS = [
     },
   },
 ];
+
+// Mob animation presets ------------------------------------------------------------
+// Each one builds only the Animations graph and leaves the shader graphs alone.
+
+function animPart(g, x, y, mob, part, mode = 'Add to vanilla') {
+  return add(g, 'animPart', x, y, { mob, part, mode });
+}
+
+function animNote(g, x, y) {
+  return add(g, 'note', x, y, { text: 'In game this needs the Entity Model Features and Entity Texture Features mods (Fabric) and the resource pack from Export.' });
+}
+
+// The default Animations graph: zombies bob their head and swing their arms
+// with each step, and breathe while standing.
+export function defaultAnimGraph() {
+  const g = graph();
+  const walk = add(g, 'animWalk', 40, 60);
+  const tilt = add(g, 'animMul', 320, 40, {}, { b: 8 });
+  const armR = add(g, 'animMul', 320, 180, {}, { b: 20 });
+  const armL = add(g, 'animMul', 320, 320, {}, { b: 20 });
+  const breathe = add(g, 'animWave', 320, 460, {}, { speed: 0.35, amp: 3 });
+  const head = animPart(g, 660, 40, 'Zombie', 'head');
+  const right = animPart(g, 660, 400, 'Zombie', 'right_arm');
+  const left = animPart(g, 960, 400, 'Zombie', 'left_arm');
+  wire(g, walk, 'swing', tilt, 'a');
+  wire(g, walk, 'swing', armR, 'a');
+  wire(g, walk, 'opp', armL, 'a');
+  wire(g, tilt, 'out', head, 'rz');
+  wire(g, breathe, 'out', head, 'rx');
+  wire(g, armR, 'out', right, 'rx');
+  wire(g, armL, 'out', left, 'rx');
+  animNote(g, 40, 330);
+  return g;
+}
+
+export const ANIM_PRESETS = [
+  {
+    id: 'animLively',
+    name: 'Lively Zombies',
+    blurb: 'Zombies bob their heads and swing their arms with every step, and breathe while standing.',
+    build: defaultAnimGraph,
+  },
+  {
+    id: 'animBreathing',
+    name: 'Breathing Idle',
+    blurb: 'Zombies and players sway their arms gently while standing; it fades out as they walk.',
+    build() {
+      const g = graph();
+      const wave = add(g, 'animWave', 40, 40, {}, { speed: 0.3, amp: 4 });
+      const walk = add(g, 'animWalk', 40, 260);
+      const still = add(g, 'animNot', 300, 300);
+      const amt = add(g, 'animMul', 300, 60);
+      const neg = add(g, 'animNeg', 560, 200);
+      wire(g, walk, 'speed', still, 'x');
+      wire(g, wave, 'out', amt, 'a');
+      wire(g, still, 'out', amt, 'b');
+      wire(g, amt, 'out', neg, 'x');
+      const parts = [
+        ['Zombie', 'right_arm', amt, 820, 40], ['Zombie', 'left_arm', neg, 1120, 40],
+        ['Player', 'right_arm', amt, 820, 420], ['Player', 'left_arm', neg, 1120, 420],
+      ];
+      for (const [mob, part, src, x, y] of parts) wire(g, src, 'out', animPart(g, x, y, mob, part), 'rz');
+      animNote(g, 40, 460);
+      return g;
+    },
+  },
+  {
+    id: 'animPig',
+    name: 'Happy Pigs',
+    blurb: 'Pigs waddle and nod while they trot, and flinch their head when hit.',
+    build() {
+      const g = graph();
+      const walk = add(g, 'animWalk', 40, 40);
+      const nod = add(g, 'animWave', 320, 40, {}, { speed: 2.5, amp: 8 });
+      const nodAmt = add(g, 'animMul', 600, 40);
+      const waddle = add(g, 'animMul', 320, 260, {}, { b: 6 });
+      const hurt = add(g, 'animHurt', 40, 400);
+      const flinch = add(g, 'animMul', 320, 440, {}, { b: 30 });
+      wire(g, nod, 'out', nodAmt, 'a');
+      wire(g, walk, 'speed', nodAmt, 'b');
+      wire(g, walk, 'swing', waddle, 'a');
+      wire(g, hurt, 'hurt', flinch, 'a');
+      const head = animPart(g, 900, 40, 'Pig', 'head');
+      const body = animPart(g, 900, 420, 'Pig', 'body');
+      wire(g, nodAmt, 'out', head, 'rx');
+      wire(g, flinch, 'out', head, 'ry');
+      wire(g, waddle, 'out', body, 'ry');
+      animNote(g, 40, 620);
+      return g;
+    },
+  },
+  {
+    id: 'animCreeper',
+    name: 'Bouncy Creepers',
+    blurb: 'Creepers hop with each step and puff up their heads when they chase you.',
+    build() {
+      const g = graph();
+      const walk = add(g, 'animWalk', 40, 40);
+      const bounce = add(g, 'animAbs', 320, 40);
+      const height = add(g, 'animMul', 560, 40, {}, { b: 2 });
+      const angry = add(g, 'animState', 40, 300, { state: 'Aggressive' });
+      const smooth = add(g, 'animSmooth', 320, 300, {}, { speed: 6 });
+      const puff = add(g, 'animRemap', 560, 260, {}, { c: 1, d: 1.15 });
+      wire(g, walk, 'swing', bounce, 'x');
+      wire(g, bounce, 'out', height, 'a');
+      wire(g, angry, 'out', smooth, 'x');
+      wire(g, smooth, 'out', puff, 'x');
+      const head = animPart(g, 860, 40, 'Creeper', 'head');
+      const body = animPart(g, 1160, 40, 'Creeper', 'body');
+      wire(g, height, 'out', head, 'ty');
+      wire(g, height, 'out', body, 'ty');
+      wire(g, puff, 'out', head, 'scale');
+      animNote(g, 40, 520);
+      return g;
+    },
+  },
+];

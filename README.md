@@ -8,6 +8,7 @@ It works like Unity Shader Graph: every node is a small piece of GLSL, and the g
 
 - **Three shader graphs.** *Blocks* runs on every block (exports to `gbuffers_terrain` and `gbuffers_water`). *Items & Entities* runs on held items, dropped items, item frames, item displays, armour, mobs, players and block entities such as chests, signs, banners, beds, skulls and shulker boxes. *Post FX* runs on the finished screen image (exports to `composite`).
 - **Textures tab: a resource pack creator.** Build textures with Blender-style nodes (Brick, Wave, Magic, Musgrave, Voronoi, Noise, White Noise, Gradient), pixel-paint on top (pencil, eraser, fill, colour picker), or upload PNGs (for example textures baked in Blender). Pick which Minecraft texture each one replaces, see it in the live preview under your shader, and export a resource pack (format 75, Minecraft 1.21.11). The **Image Texture** node samples any of them inside a shader, and they ship in the shader pack as Iris custom textures.
+- **Mob animations.** An *Animations* tab remakes how mobs move, like the Fresh Animations pack: walk cycles, breathing, attack lunges, flinching when hit. Nodes read the mob (walk cycle, head look, attack, hurt, states like sneaking or swimming) and shape motion (Wave, Keyframes, Ease, Smooth, Timer, maths and logic), then **Animate Part** rotates, moves, scales or hides a body part. It exports Entity Model Features `.jem` files in the resource pack, and the preview plays the same animation on a zombie, player, skeleton, creeper, pig, cow or sheep with Attack, Hurt, Jump and Sneak buttons.
 - **Sun shadows.** A real Iris shadow pass (`shadow.vsh`/`shadow.fsh`). Blocks, mobs, players and chests cast shadows onto blocks, water, items, mobs and block entities. Cut-out leaves and plants give dappled shadows, and the Blocks graph's Vertex Offset runs in the shadow pass, so waving plants cast waving shadows. Strength, softness, quality, distance and sun angle are set in the Graph panel and become a *Shadows* page in Iris → Shader Settings.
 - **Masks that tell objects apart.** Is Held (first person), Item ID Mask, Held Item Mask, Entity Type Mask and Block Entity Mask. Ready-made groups: swords (and 1.21.11 spears), tools, shields, armour, food, blocks as items, players, hostile mobs, item displays, dropped items, chests, signs, banners, beds, skulls and shulker boxes.
 - **About 146 nodes, following Unity Shader Graph's library.** Inputs (block texture and LOD, biome tint, light, block type masks, face UV, view direction, screen position, sun and sky, camera, time and weather), Math (basic, advanced, range, round, interpolation, derivatives, random), Trigonometry and waves, Vector and channel (cross, projection, reflection, refract, rotate about axis, sphere mask, swizzle, flip, channel mask), Logic (branch, comparison, and, or, not), Artistic colour (blend with 21 modes, white balance, replace colour, colour mask, channel mixer, invert, colourspace conversion, dither, gradient, blackbody, metal reflectance), Normal (from height, strength, blend), UV (tiling and offset, rotate, twirl, polar, spherize, radial shear), Procedural (noise, gradient noise, Voronoi, checkerboard, ellipse, rectangle, rounded rectangle, polygon) and screen effects.
@@ -46,6 +47,30 @@ Its output compiles into six Iris programs:
 
 The **Shiny Weapons** preset shows it off: swords, tools, armour and shields are masked with Item ID Mask, their bright (metal) pixels get high Smoothness and Metallic, and Lit lighting makes them catch the sun and reflect the sky. A *Weapon Shine* slider appears in Iris → Shader Settings.
 
+## Mob animations
+
+The Animations graph compiles to OptiFine CEM animation expressions, which the **Entity Model Features** (EMF) mod runs on Fabric. Install EMF and **Entity Texture Features** (ETF, which EMF needs) for 1.21.11 next to Iris and Sodium, and turn on the resource pack from Export.
+
+- Each animated mob gets a `.jem` in `assets/minecraft/optifine/cem/`. It holds one empty part attached to the mob's model, carrying the animation lines, so the game keeps its own geometry and textures. Only the parts you animate change.
+- **Add to vanilla** keeps Minecraft's own motion (`head.rx = head.rx + …`) and adds yours. **Replace vanilla** sets the rotation from the rest pose instead.
+- Angles are in degrees and moves in pixels (16 per block). Rotate X nods forward, Y turns and Z tilts. Move up, forward and right are positive.
+- Look-alikes and layers get the same file, so clothes and wool move with the body:
+
+| Mob | Files |
+| --- | --- |
+| Zombie | zombie, husk, drowned, drowned_outer, zombie_villager |
+| Skeleton | skeleton, stray, stray_outer, wither_skeleton, bogged, bogged_outer, parched |
+| Player | player, player_slim (EMF only) |
+| Creeper | creeper, creeper_charge |
+| Pig | pig, pig_saddle, cold_pig, warm_pig |
+| Cow | cow, mooshroom, cold_cow, warm_cow |
+| Sheep | sheep, sheep_wool |
+
+- Smooth and Timer keep state between frames in `var.*` entity variables. Vanilla Pose reads a part before any of your lines run.
+- Ease, Keyframes, Move Direction and some states (jumping, swimming, climbing, blocking) use EMF additions to the OptiFine format.
+- Every node shows its value over a short clip (walking, then an attack and a hit). The preview runs the exported expressions through its own interpreter, so it plays what the game will play.
+- Presets: Lively Zombies, Breathing Idle, Happy Pigs and Bouncy Creepers. Shader presets leave your animations alone.
+
 ## Shadows
 
 | Setting | Iris option | What it does |
@@ -65,7 +90,7 @@ The **Shiny Weapons** preset shows it off: swords, tools, armour and shields are
 
 ## Install an exported pack
 
-1. Install Fabric Loader for 1.21.11, then the Iris and Sodium mods.
+1. Install Fabric Loader for 1.21.11, then the Iris and Sodium mods. For mob animations, also Entity Model Features and Entity Texture Features.
 2. Put the exported `.zip` in `.minecraft/shaderpacks`. Leave it zipped.
 3. In game, open Options → Video Settings → Shader Packs (or press `O`), select the pack and press Apply.
 4. After exporting a new version, replace the zip and press `R` in game to reload.
@@ -82,6 +107,8 @@ The zip also contains `blockgraph-graph.json`. Open it with Presets → Open gra
 | `app/js/preview.js` | WebGL2 renderer, procedural block textures and the preview scene |
 | `app/js/editor.js` | The node canvas: dragging, wiring, panning, zooming, selection |
 | `app/js/textures.js` | Textures tab: baking, pixel paint, uploads, resource pack export |
+| `app/js/anim.js` | Animations graph: CEM expression compiler, the preview's CEM interpreter, `.jem` export |
+| `app/js/mobs.js` | Mob part names, preview geometry and the vanilla walk, attack and sneak poses |
 | `app/js/app.js` | App shell: library, inspector, presets, undo, export |
 | `app/js/zip.js` | Small ZIP writer for the pack export |
 
@@ -90,6 +117,7 @@ Generated shaders are written to be valid both as GLSL ES 3.00 (preview) and GLS
 ## Limits of this version
 
 - No coloured shadows through stained glass, screen-space reflections or volumetric light yet.
+- Animations move the parts a mob already has. New body shapes need a model editor such as Blockbench. The preview's mobs are close to, not exactly, the game's models, and it shows seven mobs.
 - Unity features with no Minecraft equivalent are left out: Sub Graphs, matrix nodes, texture and cubemap asset nodes, parallax mapping, object and reflection probe data.
 - Sky, clouds, particles, beacon beams and spider eyes use simple vanilla-style shaders. The graphs cover blocks, items, entities, block entities and the screen.
 - The sky reflection is a cheap gradient (sky colour above, fog colour at the horizon), not a real reflection of the world.

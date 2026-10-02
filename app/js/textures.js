@@ -625,7 +625,7 @@ export async function buildResourcePackFiles(name) {
 // Textures used by Image Texture nodes in the shader graphs, for the shader pack.
 export async function shaderTextureFiles(graphs) {
   const ids = new Set();
-  for (const g of [graphs.terrain, graphs.post]) {
+  for (const g of [graphs.terrain, graphs.entity, graphs.post].filter(Boolean)) {
     for (const n of g.nodes) if (NODE_DEFS[n.type]?.texturePicker && n.params?.tex) ids.add(n.params.tex);
   }
   const list = [];
