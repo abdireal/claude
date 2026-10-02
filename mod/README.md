@@ -25,9 +25,9 @@ A model file opts in with `"fabric:type": "blockgraph:obj"` (or `{ "id": "blockg
   "parent": "minecraft:item/handheld",
   "gui_light": "front",
   "textures": {
-    "blade": "mypack:item/katana_blade",
-    "grip": "mypack:item/katana_grip",
-    "particle": "mypack:item/katana_blade"
+    "blade": "mypack:block/katana_blade",
+    "grip": "mypack:block/katana_grip",
+    "particle": "mypack:block/katana_blade"
   },
   "blockgraph": {
     "emissive": ["blade"]
@@ -54,6 +54,7 @@ BlockGraph writes all of this for you.
 ### The OBJ file
 
 - One block is 0 to 1 on every axis, the same space as a vanilla model's 0 to 16. Items are laid out where their 16×16 sprite would be: the z = 0.5 plane, and for tools the handle at the bottom left and the tip at the top right.
+- Put model textures in `textures/block/`, item models too. Since 1.21.11, `textures/item/` is a separate item atlas, and Sodium draws mesh items with the block atlas, so `textures/item/` textures show the wrong pixels (grass, leaves, wood) with Sodium.
 - `usemtl` names pick the texture: a material uses the texture slot with its name, then `texture`, then `particle`. Map other names with `"materials"`.
 - Supported: `v` (with optional vertex colours), `vt`, `vn`, `f` in every index form (negative indices too), `usemtl`. Quads stay quads, bigger polygons are split into triangles. `mtllib`, groups and smoothing groups are ignored.
 - `"obj": "mypack:item/katana"` (no `.obj`) is short for `mypack:models/item/katana.obj`.
