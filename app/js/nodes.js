@@ -134,13 +134,14 @@ def({
 
 def({
   type: 'blockType', title: 'Block Type', cat: 'Input', graphs: ['terrain'],
-  desc: 'Masks that are 1 on certain blocks. Wave Mask covers leaves and the top half of plants, ready for waving.',
-  keywords: 'mc_Entity block id leaves plants foliage water mask',
+  desc: 'Masks that are 1 on certain blocks. Wave Mask covers leaves and the top half of plants, ready for waving. Custom Models is 1 on blocks that use a 3D model from the Models tab.',
+  keywords: 'mc_Entity block id leaves plants foliage water mask model mesh obj custom',
   outputs: [
     { id: 'wave', name: 'Wave Mask', type: 'float' },
     { id: 'leaves', name: 'Leaves', type: 'float' },
     { id: 'plants', name: 'Plants', type: 'float' },
     { id: 'water', name: 'Water', type: 'float' },
+    { id: 'model', name: 'Custom Models', type: 'float' },
   ],
   gen: () => ({
     out: {
@@ -148,6 +149,7 @@ def({
       leaves: 'bg_isLeaves',
       plants: 'bg_isPlant',
       water: 'bg_isWater',
+      model: 'bg_isModel',
     },
   }),
 });

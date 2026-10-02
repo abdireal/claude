@@ -39,6 +39,7 @@ const images = new Map(); // id -> ImageData of an uploaded image
 export const bakeErrors = new Map();
 const tileShown = new Map(); // preview tile -> ImageData currently shown
 let tool = 'pencil';
+let showUVs = true;
 
 export function texById(id) {
   return ctx.state.textures.find((t) => t.id === id) || null;
@@ -290,6 +291,48 @@ export async function uploadImage(file) {
   return t;
 }
 
+// Adds an image as a texture without cropping it: model UVs cover the whole
+// image, so it is stretched to the nearest Minecraft-friendly square instead.
+export function addImageTexture(img, name, { select = false } = {}) {
+  const side = Math.max(img.width, img.height);
+  const size = SIZES.reduce((best, s) => (Math.abs(s - side) < Math.abs(best - side) ? s : best), 16);
+  let out = img;
+  if (img.width !== size || img.height !== size) {
+    const c = document.createElement('canvas');
+    c.width = img.width;
+    c.height = img.height;
+    c.getContext('2d').putImageData(img, 0, 0);
+    const d = document.createElement('canvas');
+    d.width = d.height = size;
+    const g = d.getContext('2d');
+    g.imageSmoothingEnabled = size < side;
+    g.drawImage(c, 0, 0, img.width, img.height, 0, 0, size, size);
+    out = g.getImageData(0, 0, size, size);
+  }
+  const t = {
+    id: `t${ctx.state.texNext++}`,
+    name: uniqueName(String(name || 'Image').slice(0, 40)),
+    kind: 'image',
+    target: '',
+    size,
+    seamless: false,
+    blur: false,
+    image: imageDataToDataUrl(out),
+    paint: null,
+  };
+  ctx.state.textures.push(t);
+  if (select) ctx.state.texSel = t.id;
+  images.set(t.id, out);
+  syncRegistry();
+  bake(t);
+  return t;
+}
+
+// The finished pixels of a texture (node or image result with paint on top).
+export function bakedImage(id) {
+  return baked.get(id) || null;
+}
+
 // ----------------------------------------------------------------- panel
 
 export function renderPanel() {
@@ -318,7 +361,9 @@ function renderList() {
     const img = baked.get(t.id);
     if (img) drawScaled(thumb, img, false);
     const meta = el('span', 'tex-meta');
-    meta.append(el('span', 'tex-name', t.name), el('span', 'tex-target', t.target ? t.target.replace('block/', '') : t.kind === 'image' ? 'image · shader' : 'shader only'));
+    const usedBy = ctx.modelUsage?.(t.id) || [];
+    const label = t.target ? t.target.replace('block/', '') : usedBy.length ? `model · ${usedBy.join(', ')}` : t.kind === 'image' ? 'image · shader' : 'shader only';
+    meta.append(el('span', 'tex-name', t.name), el('span', 'tex-target', label));
     b.append(thumb, meta);
     b.addEventListener('click', () => ctx.selectTexture(t.id));
     list.append(b);
@@ -405,7 +450,9 @@ function renderProps() {
   const lbl = el('label', 'field');
   lbl.append(el('span', 'field-label', 'Replaces Minecraft texture'), tgt);
   const notes = [];
-  if (!t.target) notes.push('Not in the resource pack. Use it in a shader with Image Texture.');
+  const usedBy = ctx.modelUsage?.(t.id) || [];
+  if (usedBy.length) notes.push(`Used by the model${usedBy.length > 1 ? 's' : ''} ${usedBy.map((n) => `“${n}”`).join(', ')}, so it goes into the resource pack with ${usedBy.length > 1 ? 'them' : 'it'}.`);
+  if (!t.target) { if (!usedBy.length) notes.push('Not in the resource pack. Use it in a shader with Image Texture.'); }
   else notes.push(`Goes to assets/minecraft/textures/${t.target}.png in the resource pack.`);
   if (TINTED.has(t.target)) notes.push('Minecraft tints this one by biome, so keep it grey.');
   if (ANIMATED.has(t.target)) notes.push('This texture is animated in vanilla. Yours will be still.');
@@ -433,6 +480,16 @@ function renderProps() {
   sw2.append(cb2, el('span', 'switch'), el('span', null, 'Smooth in shaders'));
   sw2.title = 'Off keeps hard pixels when an Image Texture node samples it';
   switches.append(sw2);
+  if (usedBy.length) {
+    const sw3 = el('label', 'ctl-switch');
+    const cb3 = el('input');
+    cb3.type = 'checkbox';
+    cb3.checked = showUVs;
+    cb3.addEventListener('change', () => { showUVs = cb3.checked; drawCanvases(); });
+    sw3.append(cb3, el('span', 'switch'), el('span', null, 'Show model UVs'));
+    sw3.title = 'Draws the model\u2019s faces over the texture, so you know where to paint';
+    switches.append(sw3);
+  }
   box.append(switches);
 
   const err = bakeErrors.get(t.id);
@@ -510,6 +567,25 @@ export function drawCanvases() {
   }
   const img = baked.get(t.id);
   drawScaled(main, img, true);
+  const segs = showUVs ? ctx.uvSegments?.(t.id) : null;
+  if (segs) {
+    const mg = main.getContext('2d');
+    const W = main.width, H = main.height;
+    mg.save();
+    mg.beginPath();
+    for (let i = 0; i < segs.length; i += 4) {
+      mg.moveTo(segs[i] * W, segs[i + 1] * H);
+      mg.lineTo(segs[i + 2] * W, segs[i + 3] * H);
+    }
+    // a dark edge under a light line, so the UVs show on any texture
+    mg.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+    mg.lineWidth = 3;
+    mg.stroke();
+    mg.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+    mg.lineWidth = 1;
+    mg.stroke();
+    mg.restore();
+  }
   const g = tile.getContext('2d');
   const tmp = document.createElement('canvas');
   tmp.width = img.width;
@@ -607,6 +683,7 @@ function setTool(name) {
 // ----------------------------------------------------------------- export
 
 // The resource pack: pack.mcmeta, a pack icon and every texture with a target.
+// Models add their own files (see models.js).
 export async function buildResourcePackFiles(name) {
   const files = {};
   files['pack.mcmeta'] = JSON.stringify({

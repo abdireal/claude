@@ -6,7 +6,7 @@
 import { compileStage, collectSettings, defaultParams } from './codegen.js';
 import { GLSL_HELPERS, GLSL_FRAG_HELPERS, NODE_DEFS, texSampler, ID_GROUPS } from './nodes.js';
 
-export const BLOCK_IDS = { leaves: 10001, plants: 10002, water: 10003 };
+export const BLOCK_IDS = { leaves: 10001, plants: 10002, water: 10003, model: 10004 };
 
 // ------------------------------------------------------------------ shadows
 // Pack-wide sun shadows. Each value is also an option in Iris → Shader Settings.
@@ -186,6 +186,7 @@ function terrainBuiltins(target, stage) {
       'float bg_isLeaves = abs(bg_blockId - 1.0) < 0.5 ? 1.0 : 0.0;',
       'float bg_isPlant = abs(bg_blockId - 2.0) < 0.5 ? 1.0 : 0.0;',
       'float bg_isWater = abs(bg_blockId - 3.0) < 0.5 ? 1.0 : 0.0;',
+      'float bg_isModel = abs(bg_blockId - 4.0) < 0.5 ? 1.0 : 0.0;',
     );
   } else {
     lines.push(
@@ -195,6 +196,7 @@ function terrainBuiltins(target, stage) {
       `float bg_isLeaves = bg_id == ${BLOCK_IDS.leaves} ? 1.0 : 0.0;`,
       `float bg_isPlant = bg_id == ${BLOCK_IDS.plants} ? 1.0 : 0.0;`,
       `float bg_isWater = bg_id == ${BLOCK_IDS.water} ? 1.0 : 0.0;`,
+      `float bg_isModel = bg_id == ${BLOCK_IDS.model} ? 1.0 : 0.0;`,
     );
   }
   lines.push(
@@ -697,6 +699,7 @@ ${indent(COMMON_TIME(true), '  ')}
   float bg_isLeaves = 0.0;
   float bg_isPlant = 0.0;
   float bg_isWater = 0.0;
+  float bg_isModel = 0.0;
   float bg_plantTop = step(0.0, p.y);
   float bg_viewDist = 8.0;
   vec3 bg_viewDir = vec3(0.0, 0.0, 1.0);
@@ -1324,6 +1327,10 @@ export function buildIris(graphs, opts = {}) {
     `block.${BLOCK_IDS.leaves}=${LEAVES.join(' ')}`,
     `block.${BLOCK_IDS.plants}=${PLANTS.join(' ')}`,
     `block.${BLOCK_IDS.water}=water`,
+    ...(opts.modelBlocks?.length ? [
+      '# Blocks that use a 3D model from the Models tab (BlockGraph Models mod).',
+      `block.${BLOCK_IDS.model}=${opts.modelBlocks.join(' ')}`,
+    ] : []),
     '',
     '# Block entities, read through blockEntityId by the Block Entity Mask node.',
     ...Object.values(ID_GROUPS.blockEntities).map((g) => `block.${g.id}=${g.names.join(' ')}`),

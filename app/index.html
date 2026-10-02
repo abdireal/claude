@@ -33,6 +33,9 @@
       <button class="graph-tab" role="tab" type="button" data-kind="texture" id="tab-texture">
         <span class="tab-name">Textures</span><span class="tab-badge" hidden></span>
       </button>
+      <button class="graph-tab" role="tab" type="button" data-kind="model" id="tab-model">
+        <span class="tab-name">Models</span><span class="tab-badge" hidden></span>
+      </button>
     </div>
 
     <div class="top-actions">
@@ -106,6 +109,39 @@
       <p class="welcome-eyebrow">Uploaded image</p>
       <h2 id="image-note-title">Image</h2>
       <p>Uploaded images have no node graph. Paint on them in the panel on the right, pick the Minecraft texture they replace, or use them in the Blocks, Items &amp; Entities or Post FX graph through an Image Texture node.</p>
+    </div>
+    <div class="model-stage" id="model-stage" hidden>
+      <canvas id="model-view" aria-label="3D view of the selected model. Drag to orbit, shift-drag to pan, scroll to zoom, double-click to reset."></canvas>
+      <div class="model-hud" id="model-hud" hidden>
+        <div class="model-hud-text">
+          <p class="model-title" id="model-title"></p>
+          <p class="model-sub" id="model-sub"></p>
+        </div>
+        <div class="hud-right">
+          <label class="ctl-switch small hud-switch"><input type="checkbox" id="model-wire"><span class="switch"></span><span>Wireframe</span></label>
+          <button class="hud-btn" id="model-home" type="button" title="Reset the view (double-click)">Reset view</button>
+        </div>
+      </div>
+      <p class="model-legend" id="model-legend"></p>
+      <p class="model-msg" id="model-msg" hidden></p>
+      <div class="image-note model-missing" id="model-missing" hidden>
+        <p class="welcome-eyebrow">3D data missing</p>
+        <h2>This browser no longer has this model</h2>
+        <p>Open the graph file you saved it in, or import the 3D file again.</p>
+      </div>
+      <div class="model-empty" id="model-empty" hidden>
+        <p class="welcome-eyebrow">Models</p>
+        <h2>Turn any item or block into a real 3D model</h2>
+        <p>Import an OBJ, GLB or glTF file (Blender, Blockbench and Sketchfab all export them), fit it into the block, and paint its textures in the Textures tab. It ships in your resource pack.</p>
+        <p class="model-empty-note">In game it needs the small <strong>BlockGraph Models</strong> mod: client side only, Fabric 1.21.11, works with Sodium and Iris. Players without it see the normal item.</p>
+        <div class="welcome-actions">
+          <button class="btn primary small" id="model-empty-import" type="button">Import 3D file</button>
+          <button class="btn ghost small" id="model-empty-sting" type="button">Sting</button>
+          <button class="btn ghost small" id="model-empty-sword" type="button">Sample sword</button>
+          <button class="btn ghost small" id="model-empty-crystal" type="button">Sample crystal block</button>
+        </div>
+        <p class="field-hint">You can also drop files here. Pick the .mtl, .bin and texture images together with the model.</p>
+      </div>
     </div>
     <p class="hint-bar"><span>Drag from a dot to wire</span><span>Right-click or Space to add</span><span>Shift-drag to select</span><span>Del to delete</span></p>
   </main>
@@ -185,6 +221,22 @@
       </div>
       <p class="field-hint" id="tex-hint"></p>
     </section>
+    <section class="tex-card model-card" id="model-card" aria-label="Models" hidden>
+      <div class="tex-head">
+        <h2>Models</h2>
+        <div class="tex-actions">
+          <div class="menu-wrap">
+            <button class="btn ghost small" id="model-new" type="button" aria-haspopup="menu" aria-expanded="false">New
+              <svg class="chev" viewBox="0 0 10 6" aria-hidden="true"><path d="M1 1l4 4 4-4"/></svg>
+            </button>
+            <div class="menu" id="menu-model" role="menu" hidden></div>
+          </div>
+          <button class="btn ghost small" id="model-import" type="button">Import 3D file</button>
+        </div>
+      </div>
+      <div class="tex-list" id="model-list" role="listbox" aria-label="Models in your pack"></div>
+      <div class="tex-props" id="model-props"></div>
+    </section>
     <section class="inspector" id="inspector" aria-live="polite"></section>
   </aside>
 
@@ -216,4 +268,5 @@
 <div class="toast" id="toast" role="status" hidden></div>
 <input type="file" id="file-input" accept=".json,application/json" hidden>
 <input type="file" id="image-input" accept="image/png,image/jpeg,image/webp" hidden>
+<input type="file" id="model-input" accept=".obj,.mtl,.glb,.gltf,.bin,image/png,image/jpeg,image/webp" multiple hidden>
 <script type="module" src="js/app.js"></script>

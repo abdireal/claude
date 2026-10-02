@@ -8,6 +8,7 @@ It works like Unity Shader Graph: every node is a small piece of GLSL, and the g
 
 - **Three shader graphs.** *Blocks* runs on every block (exports to `gbuffers_terrain` and `gbuffers_water`). *Items & Entities* runs on held items, dropped items, item frames, item displays, armour, mobs, players and block entities such as chests, signs, banners, beds, skulls and shulker boxes. *Post FX* runs on the finished screen image (exports to `composite`).
 - **Textures tab: a resource pack creator.** Build textures with Blender-style nodes (Brick, Wave, Magic, Musgrave, Voronoi, Noise, White Noise, Gradient), pixel-paint on top (pencil, eraser, fill, colour picker), or upload PNGs (for example textures baked in Blender). Pick which Minecraft texture each one replaces, see it in the live preview under your shader, and export a resource pack (format 75, Minecraft 1.21.11). The **Image Texture** node samples any of them inside a shader, and they ship in the shader pack as Iris custom textures.
+- **Models tab: real 3D models for items and blocks.** Import OBJ (with MTL), GLB or glTF files (from Blender: File → Export → glTF 2.0), or start from a sample: **Sting** (Bilbo's sword, replacing the netherite sword), a simple sword or a crystal block. Choose what the model is for (replace an item like `diamond_sword`, a new item id for `/give` and item displays, or replace a block like `flower_pot`), fit it into the block with pose presets, and give each material a texture from the Textures tab, where you paint it with the model's UVs drawn on top. The live preview shows item models in your hand under the Items & Entities graph and block models on the grass under the Blocks graph, where **Block Type → Custom Models** singles them out. Models ship in the resource pack and need the small client-side [BlockGraph Models mod](mod/README.md).
 - **Mob animations.** An *Animations* tab remakes how mobs move, like the Fresh Animations pack: walk cycles, breathing, attack lunges, flinching when hit. Nodes read the mob (walk cycle, head look, attack, hurt, states like sneaking or swimming) and shape motion (Wave, Keyframes, Ease, Smooth, Timer, maths and logic), then **Animate Part** rotates, moves, scales or hides a body part. It exports Entity Model Features `.jem` files in the resource pack, and the preview plays the same animation on a zombie, player, skeleton, creeper, pig, cow or sheep with Attack, Hurt, Jump and Sneak buttons.
 - **Sun shadows.** A real Iris shadow pass (`shadow.vsh`/`shadow.fsh`). Blocks, mobs, players and chests cast shadows onto blocks, water, items, mobs and block entities. Cut-out leaves and plants give dappled shadows, and the Blocks graph's Vertex Offset runs in the shadow pass, so waving plants cast waving shadows. Strength, softness, quality, distance and sun angle are set in the Graph panel and become a *Shadows* page in Iris → Shader Settings.
 - **Masks that tell objects apart.** Is Held (first person), Item ID Mask, Held Item Mask, Entity Type Mask and Block Entity Mask. Ready-made groups: swords (and 1.21.11 spears), tools, shields, armour, food, blocks as items, players, hostile mobs, item displays, dropped items, chests, signs, banners, beds, skulls and shulker boxes.
@@ -97,6 +98,28 @@ The Animations graph compiles to OptiFine CEM animation expressions, which the *
 
 The zip also contains `blockgraph-graph.json`. Open it with Presets → Open graph file to keep editing.
 
+## 3D models
+
+Minecraft can only build models out of boxes. The **BlockGraph Models** mod in [`mod/`](mod/README.md) adds real meshes:
+
+- **Client side only.** It changes how things look, not what they are, so it works on any server, vanilla ones included. Players without your resource pack see the normal item or block. Players with the pack but without the mod see a fallback that BlockGraph writes into the pack: the normal item sprite, or a textured box for blocks and shields.
+- **Fabric 1.21.11.** It needs Fabric Loader and Fabric API, and works with Sodium and Iris. Model blocks are drawn by the normal block renderer, so your Blocks shader runs on them.
+- **Any item or block.** Replace every diamond sword, give a model to any item with the `item_model` component (`/give @p stick[minecraft:item_model="mypack:katana"]`), show it at any size with an item display, or replace a non-full block such as a flower pot or lantern.
+
+To use it:
+
+1. Get the jar from the [mod build](https://github.com/abdireal/claude/actions/workflows/mod.yml) (newest green run, *Artifacts*), or build it with `cd mod && ./gradlew build`.
+2. Put it and Fabric API in `.minecraft/mods`.
+3. In BlockGraph, export the resource pack (Export → Download resource pack) and turn it on in game.
+
+What models cannot do:
+
+- Add new blocks or items. Those need the server, so models replace how existing ones look.
+- Change hitboxes, or blocks drawn by block entity renderers (chests, signs, beds, banners, heads).
+- Animate. Bows, crossbows, compasses and clocks show one model the whole time.
+- Replacing a full cube (like stone) leaves holes, because neighbouring blocks hide their faces against it. Use non-full blocks.
+- Shaders: item models (in hand, on the ground, in item displays) go through the Items & Entities graph, and block models through the Blocks graph, where **Block Type → Custom Models** singles them out. The live preview shows item models in your hand and block models on the grass.
+
 ## How it is built
 
 | File | Job |
@@ -107,6 +130,11 @@ The zip also contains `blockgraph-graph.json`. Open it with Presets → Open gra
 | `app/js/preview.js` | WebGL2 renderer, procedural block textures and the preview scene |
 | `app/js/editor.js` | The node canvas: dragging, wiring, panning, zooming, selection |
 | `app/js/textures.js` | Textures tab: baking, pixel paint, uploads, resource pack export |
+| `app/js/models.js` | Models tab: import, fitting, materials, preview, model export |
+| `app/js/meshes.js` | OBJ, MTL, glTF and GLB reading, fitting maths, OBJ export, sample models |
+| `app/js/modelview.js` | The 3D model view in the Models tab |
+| `app/samples/` | Sample models (`sting.glb`: Bilbo's Sting, from a Blender file, with its normal, roughness and emission detail baked into 512 px colour textures) |
+| `mod/` | The BlockGraph Models Fabric mod (Java, built by GitHub Actions) |
 | `app/js/anim.js` | Animations graph: CEM expression compiler, the preview's CEM interpreter, `.jem` export |
 | `app/js/mobs.js` | Mob part names, preview geometry and the vanilla walk, attack and sneak poses |
 | `app/js/app.js` | App shell: library, inspector, presets, undo, export |
